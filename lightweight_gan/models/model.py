@@ -1,6 +1,10 @@
 from abc import ABC
+import matplotlib.pyplot as plt
 from lightweight_gan.layers.upsampling_convolution import UpsamplingConvolutionBlock
 from lightweight_gan.layers.skip_layer_excitation import SkipLayerExcitation
+from lightweight_gan.layers.image import Resize, StatelessCrop
+from lightweight_gan.layers.residual_downsampling import ResidualDownsamplingBlock
+from lightweight_gan.models.simple_decoder import SimpleDecoder
 import tensorflow as tf
 import typing
 
@@ -71,15 +75,253 @@ class Generator(keras.models.Model, ABC):
         return x
 
 
+class Discriminator(keras.models.Model, ABC):
+    """
+    Self-supervised discriminator. Returns 5 outputs:
+    discriminator logits, 128x128 real cropped image, 128x128 decoded cropped image, 128x128 real scaled image, 128x128 decoded scaled image
+    """
+
+    def __init__(self):
+        super(Discriminator, self).__init__()
+
+        self._crop128x128 = None
+        self._resize = None
+        self._crop8x8 = None
+
+        self._conv4x4_1 = None
+        self._prelu1 = None
+        self._conv4x4_2 = None
+        self._batchnorm1 = None
+        self._prelu2 = None
+
+        self._downsampling_layers = []
+
+        self._simple_decoder1 = None
+        self._simple_decoder2 = None
+
+        self._conv1x1 = None
+        self._batchnorm2 = None
+        self._prelu3 = None
+        self._conv4x4_3 = None
+
+    def build(self, input_shape):
+        self._resize = Resize(128, 128)
+        self._crop8x8 = StatelessCrop(8, 8)
+        self._crop128x128 = StatelessCrop(128, 128)
+        self._crop128x128.set_seed(self._crop8x8.seed)
+
+        self._conv4x4_1 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
+        self._prelu1 = keras.layers.PReLU(shared_axes=[1, 2])
+        self._conv4x4_2 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
+        self._batchnorm1 = keras.layers.BatchNormalization()
+        self._prelu2 = keras.layers.PReLU(shared_axes=[1, 2])
+
+        filters = 16
+        for i in range(5):
+            self._downsampling_layers.append(ResidualDownsamplingBlock(filters))
+            filters = filters * 2
+
+        self._simple_decoder1 = SimpleDecoder(256)
+        self._simple_decoder2 = SimpleDecoder(512)
+
+        self._conv1x1 = keras.layers.Conv2D(512, (1, 1))
+        self._batchnorm2 = keras.layers.BatchNormalization()
+        self._prelu3 = keras.layers.PReLU(shared_axes=[1, 2])
+        self._conv4x4_3 = keras.layers.Conv2D(1, (4, 4))
+
+    def update_crop_seed(self):
+        if self._crop8x8 is not None:
+            self._crop8x8.update_seed()
+            self._crop128x128.set_seed(self._crop8x8.seed)
+
+    def call(self, inputs, training=None, mask=None):
+        i = self._resize(inputs)
+        i_part = self._crop128x128(inputs)
+
+        x = self._conv4x4_1(inputs)
+        x = self._prelu1(x)
+        x = self._conv4x4_2(x)
+        x = self._batchnorm1(x)
+        x = self._prelu2(x)
+
+        a = None
+        b = None
+        size = 256
+        for layer in self._downsampling_layers:
+            x = layer(x)
+            size = size / 2
+
+            if size == 16:
+                a = self._crop8x8(x)
+                a = self._simple_decoder1(a)
+            if size == 8:
+                b = self._simple_decoder2(x)
+
+        x = self._conv1x1(x)
+        x = self._batchnorm2(x)
+        x = self._prelu3(x)
+        x = self._conv4x4_3(x)
+
+        return x, i_part, a, i, b
+
+
+class LightweightGan(keras.models.Model, ABC):
+
+    def __init__(self, ):
+        super(LightweightGan, self).__init__()
+
+        self.generator = Generator()
+        self.discriminator = Discriminator()
+
+    def build(self, input_shape):
+        self.batch_size = input_shape[0]
+
+    def compile(self, generator_optimizer, discriminator_optimizer, **kwargs):
+        super(LightweightGan, self).compile(**kwargs)
+
+        self.generator_optimizer = generator_optimizer
+        self.discriminator_optimizer = discriminator_optimizer
+
+        self.generator_loss_tracker = keras.metrics.Mean(name="g_loss")
+        self.discriminator_loss_tracker = keras.metrics.Mean(name="d_loss")
+        self.reconstruction_1_loss = keras.metrics.Mean(name="recon_1_loss")
+        self.reconstruction_2_loss = keras.metrics.Mean(name="recon_2_loss")
+        self.real_accuracy = keras.metrics.BinaryAccuracy(name="real_acc")
+        self.generated_accuracy = keras.metrics.BinaryAccuracy(name="gen_acc")
+
+    @property
+    def metrics(self):
+        return [
+            self.generator_loss_tracker,
+            self.discriminator_loss_tracker,
+            self.reconstruction_1_loss,
+            self.reconstruction_2_loss,
+            self.real_accuracy,
+            self.generated_accuracy,
+        ]
+
+    def generate(self, batch_size, training):
+        latent_samples = tf.random.normal(shape=(batch_size, 256))
+        return self.generator(latent_samples, training)
+
+    def adversarial_loss(self, real_logits, generated_logits):
+        # this is usually called the non-saturating GAN loss
+
+        real_labels = tf.ones(shape=(self.batch_size, 5, 5, 1))
+        generated_labels = tf.zeros(shape=(self.batch_size, 5, 5, 1))
+
+        # the generator tries to produce images that the discriminator considers as real
+        generator_loss = keras.losses.binary_crossentropy(
+            real_labels, generated_logits, from_logits=True
+        )
+        # the discriminator tries to determine if images are real or generated
+        discriminator_loss = keras.losses.binary_crossentropy(
+            tf.concat([real_labels, generated_labels], axis=0),
+            tf.concat([real_logits, generated_logits], axis=0),
+            from_logits=True,
+        )
+
+        return tf.reduce_mean(generator_loss), tf.reduce_mean(discriminator_loss)
+
+    @staticmethod
+    def step(values):
+        # negative values -> 0.0, positive values -> 1.0
+        return 0.5 * (1.0 + tf.sign(values))
+
+    def train_step(self, real_images):
+        #  todo: implement augmentation
+        # real_images = self.augmenter(real_images, training=True)
+
+        # use persistent gradient tape because gradients will be calculated twice
+        with tf.GradientTape(persistent=True) as tape:
+            generated_images = self.generate(self.batch_size, training=True)
+            # gradient is calculated through the image augmentation
+            # generated_images = self.augmenter(generated_images, training=True)
+
+            # separate forward passes for the real and generated images, meaning
+            # that batch normalization is applied separately
+            real_logits, real_cropped, real_recon1, real_scaled, real_recon2 = self.discriminator(real_images, training=True)
+
+            generated_logits, _, _, _, _ = self.discriminator(generated_images, training=True)
+
+            generator_loss, discriminator_loss = self.adversarial_loss(
+                real_logits, generated_logits
+            )
+
+            recon_loss1 = tf.reduce_mean(keras.losses.MeanSquaredError()(real_cropped, real_recon1))
+            recon_loss2 = tf.reduce_mean(keras.losses.MeanSquaredError()(real_scaled, real_recon2))
+
+        # calculate gradients and update weights
+        generator_gradients = tape.gradient(
+            generator_loss, self.generator.trainable_weights
+        )
+        discriminator_gradients = tape.gradient(
+            discriminator_loss + recon_loss1 + recon_loss2, self.discriminator.trainable_weights
+        )
+        self.generator_optimizer.apply_gradients(
+            zip(generator_gradients, self.generator.trainable_weights)
+        )
+        self.discriminator_optimizer.apply_gradients(
+            zip(discriminator_gradients, self.discriminator.trainable_weights)
+        )
+
+        # update the augmentation probability based on the discriminator's performance
+        # self.augmenter.update(real_logits)
+
+        self.generator_loss_tracker.update_state(generator_loss)
+        self.discriminator_loss_tracker.update_state(discriminator_loss)
+        self.reconstruction_1_loss.update_state(recon_loss1)
+        self.reconstruction_2_loss.update_state(recon_loss2)
+        self.real_accuracy.update_state(1.0, LightweightGan.step(real_logits))
+        self.generated_accuracy.update_state(0.0, LightweightGan.step(generated_logits))
+        # self.augmentation_probability_tracker.update_state(self.augmenter.probability)
+
+        return {m.name: m.result() for m in self.metrics[:-1]}
+
+    def plot_images(self, epoch=None, logs=None, num_rows=3, num_cols=6, interval=5):
+        # plot random generated images for visual evaluation of generation quality
+        if epoch is None or (epoch + 1) % interval == 0:
+            num_images = num_rows * num_cols
+            generated_images = self.generate(num_images, training=False)
+
+            plt.figure(figsize=(num_cols * 2.0, num_rows * 2.0))
+            for row in range(num_rows):
+                for col in range(num_cols):
+                    index = row * num_cols + col
+                    plt.subplot(num_rows, num_cols, index + 1)
+                    plt.imshow(generated_images[index])
+                    plt.axis("off")
+            plt.tight_layout()
+            plt.show()
+            plt.close()
+
+
 if __name__ == '__main__':
     #  test generator
     z = tf.random.normal([1, 256])
 
     generator = Generator()
     img = generator(z)
+    generator.summary()
 
     assert img.shape[1] == 1024
     assert img.shape[2] == 1024
     assert img.shape[3] == 3
 
+    #  test discriminator
 
+    discriminator = Discriminator()
+    logits, recon1, recon2 = discriminator(img)
+    discriminator.summary()
+
+    assert logits.shape[1] == 5
+    assert logits.shape[2] == 5
+    assert logits.shape[3] == 1
+
+    assert recon1.shape[1] == 128
+    assert recon1.shape[2] == 128
+    assert recon1.shape[3] == 3
+
+    assert recon2.shape[1] == 128
+    assert recon2.shape[2] == 128
+    assert recon2.shape[3] == 3

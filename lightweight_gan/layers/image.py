@@ -7,12 +7,29 @@ if typing.TYPE_CHECKING:
     from keras.api._v2 import keras
 
 
+class Resize(keras.layers.Layer):
+
+    def __init__(self, height, width, data_format='channels_last'):
+        super(Resize, self).__init__()
+
+        self._channels = None
+        self._data_format = data_format
+        self._width = width
+        self._height = height
+
+    def build(self, input_shape):
+        self._channels = input_shape[0] if self._data_format == 'channels_last' else input_shape[3]
+
+    def call(self, inputs, *args, **kwargs):
+        return tf.image.resize(inputs if self._data_format == 'channels_last' else tf.transpose(inputs, [0, 2, 3, 1]), [self._height, self._width])
+
+
 class StatelessCrop(keras.layers.Layer):
 
     def __init__(self, height, width, data_format='channels_last'):
         super(StatelessCrop, self).__init__()
 
-        self._seed = None
+        self.seed = None
         self._channels = None
         self._batch_size = None
         self._data_format = data_format
@@ -21,15 +38,18 @@ class StatelessCrop(keras.layers.Layer):
 
         self.update_seed()
 
+    def set_seed(self, seed):
+        self.seed = seed
+
     def build(self, input_shape):
         self._batch_size = input_shape[0]
         self._channels = input_shape[3] if self._data_format == 'channels_last' else input_shape[1]
 
     def call(self, inputs, *args, **kwargs):
-        return tf.image.stateless_random_crop(inputs, [self._batch_size, self._height, self._width, self._channels], self._seed)
+        return tf.image.stateless_random_crop(inputs, [self._batch_size, self._height, self._width, self._channels], self.seed)
 
     def update_seed(self):
-        self._seed = tf.random.uniform([2], maxval=self._width * self._height, dtype=tf.int32)
+        self.seed = tf.random.uniform([2], maxval=self._width * self._height, dtype=tf.int32)
 
 
 if __name__ == '__main__':
@@ -58,3 +78,11 @@ if __name__ == '__main__':
     crop2 = layer(second_image)
 
     assert tf.reduce_all(tf.math.equal(crop1, crop2))
+
+    #  test resize
+
+    resized = Resize(16, 16)(mock_image)
+
+    assert resized.shape[1] == 16
+    assert resized.shape[2] == 16
+    assert resized.shape[3] == 64
