@@ -102,9 +102,6 @@ class Discriminator(keras.models.Model, ABC):
         self._prelu3 = None
         self._conv4x4_3 = None
 
-    def update_seed(self, seed):
-        self._crop8x8.set_seed(seed)
-
     def build(self, input_shape):
         tf.config.run_functions_eagerly(True)
 
@@ -164,7 +161,6 @@ class LightweightGan(keras.models.Model, ABC):
         self.discriminator = Discriminator()
         self._resize = Resize(128, 128)
         self._crop128x128 = StatelessCrop(128, 128)
-        self.update_seeds()
 
     def compile(self, generator_optimizer, discriminator_optimizer, **kwargs):
         super(LightweightGan, self).compile(**kwargs)
@@ -187,11 +183,6 @@ class LightweightGan(keras.models.Model, ABC):
             self.real_accuracy,
             self.generated_accuracy,
         ]
-
-    def update_seeds(self):
-        seed = tf.random.uniform([2], maxval=1024 * 1024, dtype=tf.int32)
-        self._crop128x128.set_seed(seed)
-        self.discriminator.update_seed(seed)
 
     def generate(self, batch_size, training):
         latent_samples = tf.random.normal(shape=[batch_size, 256])
@@ -289,8 +280,6 @@ class LightweightGan(keras.models.Model, ABC):
         self.real_accuracy.update_state(1.0, LightweightGan.step(real_logits))
         self.generated_accuracy.update_state(0.0, LightweightGan.step(generated_logits))
         # self.augmentation_probability_tracker.update_state(self.augmenter.probability)
-
-        self.update_seeds()
 
         return {m.name: m.result() for m in self.metrics[:-1]}
 

@@ -25,17 +25,14 @@ class StatelessCrop(keras.layers.Layer):
     def __init__(self, height, width, data_format='channels_last'):
         super(StatelessCrop, self).__init__()
 
-        self.seed = None
+        # self.seed = None
         self._channels = None
         self._batch_size = None
         self._data_format = data_format
         self._height = height
         self._width = width
 
-        self.update_seed()
-
-    def set_seed(self, seed):
-        self.seed = seed
+        # self.update_seed()
 
     def build(self, input_shape):
         self._batch_size = input_shape[0]
@@ -45,8 +42,8 @@ class StatelessCrop(keras.layers.Layer):
         batch_size = tf.shape(inputs)[0]
         return tf.image.stateless_random_crop(inputs, [batch_size, self._height, self._width, self._channels], self.seed)
 
-    def update_seed(self):
-        self.seed = tf.random.uniform([2], maxval=self._width * self._height, dtype=tf.int32)
+    # def update_seed(self):
+    #     self.seed = tf.random.uniform([2], maxval=self._width * self._height, dtype=tf.int32)
 
 
 if __name__ == '__main__':
