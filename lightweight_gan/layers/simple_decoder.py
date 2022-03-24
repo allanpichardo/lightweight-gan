@@ -10,7 +10,7 @@ if typing.TYPE_CHECKING:
     from keras.api._v2 import keras
 
 
-class SimpleDecoder(keras.models.Model, ABC):
+class SimpleDecoder(keras.layers.Layer):
 
     def __init__(self, filters, image_channels=3, name="simple_decoder"):
         super(SimpleDecoder, self).__init__(name=name)
@@ -31,10 +31,8 @@ class SimpleDecoder(keras.models.Model, ABC):
 if __name__ == '__main__':
     mock_image = tf.random.normal([1, 8, 8, 64])
 
-    model = SimpleDecoder(64)
-    model.build((None, 8, 8, 64))
-    model.summary()
-    out = model(mock_image)
+    layer = SimpleDecoder(64)
+    out = layer(mock_image)
 
     assert out.shape[1] == 128
     assert out.shape[2] == 128

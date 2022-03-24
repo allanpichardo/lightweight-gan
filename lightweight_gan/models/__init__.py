@@ -1,2 +1,1 @@
-from .simple_decoder import *
-from model import *
+from .model import *

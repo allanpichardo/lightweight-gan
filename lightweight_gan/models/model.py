@@ -4,7 +4,7 @@ from lightweight_gan.layers.upsampling_convolution import UpsamplingConvolutionB
 from lightweight_gan.layers.skip_layer_excitation import SkipLayerExcitation
 from lightweight_gan.layers.image import Resize, StatelessCrop
 from lightweight_gan.layers.residual_downsampling import ResidualDownsamplingBlock
-from lightweight_gan.models.simple_decoder import SimpleDecoder
+from lightweight_gan.layers.simple_decoder import SimpleDecoder
 import tensorflow as tf
 import typing
 
@@ -84,9 +84,7 @@ class Discriminator(keras.models.Model, ABC):
     def __init__(self):
         super(Discriminator, self).__init__()
 
-        self._crop128x128 = None
-        self._resize = None
-        self._crop8x8 = None
+        self._crop8x8 = StatelessCrop(8, 8)
 
         self._conv4x4_1 = None
         self._prelu1 = None
@@ -104,11 +102,11 @@ class Discriminator(keras.models.Model, ABC):
         self._prelu3 = None
         self._conv4x4_3 = None
 
+    def update_seed(self, seed):
+        self._crop8x8.set_seed(seed)
+
     def build(self, input_shape):
-        self._resize = Resize(128, 128)
-        self._crop8x8 = StatelessCrop(8, 8)
-        self._crop128x128 = StatelessCrop(128, 128)
-        self._crop128x128.set_seed(self._crop8x8.seed)
+        tf.config.run_functions_eagerly(True)
 
         self._conv4x4_1 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
         self._prelu1 = keras.layers.PReLU(shared_axes=[1, 2])
@@ -129,15 +127,7 @@ class Discriminator(keras.models.Model, ABC):
         self._prelu3 = keras.layers.PReLU(shared_axes=[1, 2])
         self._conv4x4_3 = keras.layers.Conv2D(1, (4, 4))
 
-    def update_crop_seed(self):
-        if self._crop8x8 is not None:
-            self._crop8x8.update_seed()
-            self._crop128x128.set_seed(self._crop8x8.seed)
-
     def call(self, inputs, training=None, mask=None):
-        i = self._resize(inputs)
-        i_part = self._crop128x128(inputs)
-
         x = self._conv4x4_1(inputs)
         x = self._prelu1(x)
         x = self._conv4x4_2(x)
@@ -162,7 +152,7 @@ class Discriminator(keras.models.Model, ABC):
         x = self._prelu3(x)
         x = self._conv4x4_3(x)
 
-        return x, i_part, a, i, b
+        return x, a, b
 
 
 class LightweightGan(keras.models.Model, ABC):
@@ -172,9 +162,9 @@ class LightweightGan(keras.models.Model, ABC):
 
         self.generator = Generator()
         self.discriminator = Discriminator()
-
-    def build(self, input_shape):
-        self.batch_size = input_shape[0]
+        self._resize = Resize(128, 128)
+        self._crop128x128 = StatelessCrop(128, 128)
+        self.discriminator.update_seed(self._crop128x128.seed)
 
     def compile(self, generator_optimizer, discriminator_optimizer, **kwargs):
         super(LightweightGan, self).compile(**kwargs)
@@ -184,8 +174,7 @@ class LightweightGan(keras.models.Model, ABC):
 
         self.generator_loss_tracker = keras.metrics.Mean(name="g_loss")
         self.discriminator_loss_tracker = keras.metrics.Mean(name="d_loss")
-        self.reconstruction_1_loss = keras.metrics.Mean(name="recon_1_loss")
-        self.reconstruction_2_loss = keras.metrics.Mean(name="recon_2_loss")
+        self.reconstruction_loss = keras.metrics.Mean(name="recon_loss")
         self.real_accuracy = keras.metrics.BinaryAccuracy(name="real_acc")
         self.generated_accuracy = keras.metrics.BinaryAccuracy(name="gen_acc")
 
@@ -194,21 +183,32 @@ class LightweightGan(keras.models.Model, ABC):
         return [
             self.generator_loss_tracker,
             self.discriminator_loss_tracker,
-            self.reconstruction_1_loss,
-            self.reconstruction_2_loss,
+            self.reconstruction_loss,
             self.real_accuracy,
             self.generated_accuracy,
         ]
 
     def generate(self, batch_size, training):
-        latent_samples = tf.random.normal(shape=(batch_size, 256))
+        latent_samples = tf.random.normal(shape=[batch_size, 256])
         return self.generator(latent_samples, training)
 
+    def autoencoder_loss(self, real_images, i_scaled_input, image_i, i_cropped_input, image_i_part):
+        i_loss = keras.losses.mean_squared_error(
+            i_scaled_input, image_i
+        )
+
+        i_part_loss = keras.losses.mean_squared_error(
+            i_cropped_input, image_i_part
+        )
+
+        return tf.reduce_mean(i_loss) + tf.reduce_mean(i_part_loss)
+
     def adversarial_loss(self, real_logits, generated_logits):
+        batch_size = tf.shape(real_logits)[0]
         # this is usually called the non-saturating GAN loss
 
-        real_labels = tf.ones(shape=(self.batch_size, 5, 5, 1))
-        generated_labels = tf.zeros(shape=(self.batch_size, 5, 5, 1))
+        real_labels = tf.ones(shape=(batch_size, 5, 5, 1))
+        generated_labels = tf.zeros(shape=(batch_size, 5, 5, 1))
 
         # the generator tries to produce images that the discriminator considers as real
         generator_loss = keras.losses.binary_crossentropy(
@@ -228,35 +228,47 @@ class LightweightGan(keras.models.Model, ABC):
         # negative values -> 0.0, positive values -> 1.0
         return 0.5 * (1.0 + tf.sign(values))
 
+    def call(self, inputs, training=None, mask=None):
+        if training:
+            return self.discriminator(self.generator(inputs))
+        else:
+            return self.generator(inputs)
+
     def train_step(self, real_images):
+        batch_size = tf.shape(real_images)[0]
+        i_scaled_input = tf.Variable(self._resize(real_images))
+        i_cropped_input = tf.Variable(self._crop128x128(real_images))
         #  todo: implement augmentation
         # real_images = self.augmenter(real_images, training=True)
 
         # use persistent gradient tape because gradients will be calculated twice
         with tf.GradientTape(persistent=True) as tape:
-            generated_images = self.generate(self.batch_size, training=True)
+            tape.watch(i_scaled_input)
+            tape.watch(i_cropped_input)
+
+            generated_images = self.generate(batch_size, training=True)
             # gradient is calculated through the image augmentation
             # generated_images = self.augmenter(generated_images, training=True)
 
             # separate forward passes for the real and generated images, meaning
             # that batch normalization is applied separately
-            real_logits, real_cropped, real_recon1, real_scaled, real_recon2 = self.discriminator(real_images, training=True)
+            real_logits, i_crop, i_scaled = self.discriminator(real_images, training=True)
 
-            generated_logits, _, _, _, _ = self.discriminator(generated_images, training=True)
+            generated_logits, _, _ = self.discriminator(generated_images, training=True)
 
             generator_loss, discriminator_loss = self.adversarial_loss(
                 real_logits, generated_logits
             )
 
-            recon_loss1 = tf.reduce_mean(keras.losses.MeanSquaredError()(real_cropped, real_recon1))
-            recon_loss2 = tf.reduce_mean(keras.losses.MeanSquaredError()(real_scaled, real_recon2))
+            reconstruction_loss = self.autoencoder_loss(real_images, i_scaled_input, i_scaled, i_cropped_input, i_crop)
 
         # calculate gradients and update weights
         generator_gradients = tape.gradient(
             generator_loss, self.generator.trainable_weights
         )
+
         discriminator_gradients = tape.gradient(
-            discriminator_loss + recon_loss1 + recon_loss2, self.discriminator.trainable_weights
+            [discriminator_loss, reconstruction_loss], self.discriminator.trainable_weights
         )
         self.generator_optimizer.apply_gradients(
             zip(generator_gradients, self.generator.trainable_weights)
@@ -270,11 +282,13 @@ class LightweightGan(keras.models.Model, ABC):
 
         self.generator_loss_tracker.update_state(generator_loss)
         self.discriminator_loss_tracker.update_state(discriminator_loss)
-        self.reconstruction_1_loss.update_state(recon_loss1)
-        self.reconstruction_2_loss.update_state(recon_loss2)
+        self.reconstruction_loss.update_state(reconstruction_loss)
         self.real_accuracy.update_state(1.0, LightweightGan.step(real_logits))
         self.generated_accuracy.update_state(0.0, LightweightGan.step(generated_logits))
         # self.augmentation_probability_tracker.update_state(self.augmenter.probability)
+
+        self._crop128x128.update_seed()
+        self.discriminator.update_seed(self._crop128x128.seed)
 
         return {m.name: m.result() for m in self.metrics[:-1]}
 
@@ -325,3 +339,15 @@ if __name__ == '__main__':
     assert recon2.shape[1] == 128
     assert recon2.shape[2] == 128
     assert recon2.shape[3] == 3
+
+    # test gan
+
+    mock_dataset = tf.random.normal([8, 1024, 1024, 3], mean=0.5, stddev=0.5)
+
+    gan = LightweightGan()
+    gan.compile(
+        generator_optimizer=keras.optimizers.Adam(),
+        discriminator_optimizer=keras.optimizers.Adam(),
+    )
+
+    gan.fit(mock_dataset, epochs=5, callbacks=[keras.callbacks.LambdaCallback(on_epoch_end=gan.plot_images)])
