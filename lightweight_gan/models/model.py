@@ -207,15 +207,19 @@ class LightweightGan(keras.models.Model, ABC):
         generated_labels = tf.zeros(shape=(batch_size, 5, 5, 1))
 
         # the generator tries to produce images that the discriminator considers as real
-        generator_loss = keras.losses.binary_crossentropy(
-            real_labels, generated_logits, from_logits=True
+        generator_loss = keras.losses.hinge(
+            real_labels, generated_logits
         )
         # the discriminator tries to determine if images are real or generated
-        discriminator_loss = keras.losses.binary_crossentropy(
+        discriminator_loss = keras.losses.hinge(
             tf.concat([real_labels, generated_labels], axis=0),
-            tf.concat([real_logits, generated_logits], axis=0),
-            from_logits=True,
+            tf.concat([real_logits, generated_logits], axis=0)
         )
+        # discriminator_loss = keras.losses.binary_crossentropy(
+        #     tf.concat([real_labels, generated_labels], axis=0),
+        #     tf.concat([real_logits, generated_logits], axis=0),
+        #     from_logits=True,
+        # )
 
         return tf.reduce_mean(generator_loss), tf.reduce_mean(discriminator_loss)
 
