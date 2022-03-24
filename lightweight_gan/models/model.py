@@ -189,7 +189,7 @@ class LightweightGan(keras.models.Model, ABC):
         ]
 
     def update_seeds(self):
-        seed = tf.random.uniform([2], maxval=self._width * self._height, dtype=tf.int32)
+        seed = tf.random.uniform([2], maxval=1024 * 1024, dtype=tf.int32)
         self._crop128x128.set_seed(seed)
         self.discriminator.update_seed(seed)
 
