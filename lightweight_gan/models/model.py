@@ -236,15 +236,13 @@ class LightweightGan(keras.models.Model, ABC):
 
     def train_step(self, real_images):
         batch_size = tf.shape(real_images)[0]
-        i_scaled_input = tf.Variable(self._resize(real_images))
-        i_cropped_input = tf.Variable(self._crop128x128(real_images))
+        i_scaled_input = self._resize(real_images)
+        i_cropped_input = self._crop128x128(real_images)
         #  todo: implement augmentation
         # real_images = self.augmenter(real_images, training=True)
 
         # use persistent gradient tape because gradients will be calculated twice
         with tf.GradientTape(persistent=True) as tape:
-            tape.watch(i_scaled_input)
-            tape.watch(i_cropped_input)
 
             generated_images = self.generate(batch_size, training=True)
             # gradient is calculated through the image augmentation
