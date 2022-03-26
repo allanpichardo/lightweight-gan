@@ -1,3 +1,4 @@
+import os.path
 from abc import ABC
 import matplotlib.pyplot as plt
 from lightweight_gan.layers.upsampling_convolution import UpsamplingConvolutionBlock
@@ -304,6 +305,17 @@ class LightweightGan(keras.models.Model, ABC):
             plt.show()
             plt.close()
 
+    def save_image_callback(self, image_dir, interval=5, amount=10):
+        def callback_function(epoch=None, logs=None):
+            if epoch is None or (epoch + 1) % interval == 0:
+                generated_images = self.generate(amount, training=False)
+                for i, image in enumerate(generated_images):
+                    jpg = tf.image.convert_image_dtype(image, tf.uint8, saturate=True)
+                    jpg = tf.image.encode_jpeg(jpg)
+                    tf.io.write_file(os.path.join(image_dir, str(epoch) if epoch is not None else '0', "image-{}.jpg".format(i)), jpg)
+
+        return callback_function
+
 
 if __name__ == '__main__':
     #  test generator
@@ -345,4 +357,6 @@ if __name__ == '__main__':
         discriminator_optimizer=keras.optimizers.Adam(),
     )
 
-    gan.fit(mock_dataset, epochs=5, callbacks=[keras.callbacks.LambdaCallback(on_epoch_end=gan.plot_images)])
+    gan.fit(mock_dataset, epochs=5, callbacks=[keras.callbacks.LambdaCallback(on_epoch_end=gan.save_image_callback(
+        os.path.join(os.path.dirname(__file__), 'generated')
+    ))])
