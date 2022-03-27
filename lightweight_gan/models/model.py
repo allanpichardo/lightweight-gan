@@ -1,12 +1,16 @@
 import os.path
 from abc import ABC
+
+import lightweight_gan.losses
 from lightweight_gan.layers.upsampling_convolution import UpsamplingConvolutionBlock
 from lightweight_gan.layers.skip_layer_excitation import SkipLayerExcitation
 from lightweight_gan.layers.image import Resize, StatelessCrop
 from lightweight_gan.layers.residual_downsampling import ResidualDownsamplingBlock
 from lightweight_gan.layers.simple_decoder import SimpleDecoder
+from lightweight_gan.losses.losses import discriminator_loss, generator_loss
 import tensorflow as tf
 import typing
+import tensorflow_gan as tfgan
 
 from tensorflow import keras
 
@@ -112,6 +116,8 @@ class Discriminator(keras.models.Model, ABC):
         self._batchnorm2 = None
         self._prelu3 = None
         self._conv4x4_3 = None
+        self._flatten = None
+        self._dense = None
 
     def build(self, input_shape):
         self._conv4x4_1 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
@@ -132,6 +138,8 @@ class Discriminator(keras.models.Model, ABC):
         self._batchnorm2 = keras.layers.BatchNormalization()
         self._prelu3 = keras.layers.PReLU(shared_axes=[1, 2])
         self._conv4x4_3 = keras.layers.Conv2D(1, (4, 4))
+        self._flatten = keras.layers.Flatten()
+        self._dense = keras.layers.Dense(1)
 
     def call(self, inputs, training=None, mask=None):
         #  Data augmentation
@@ -166,6 +174,8 @@ class Discriminator(keras.models.Model, ABC):
         x = self._batchnorm2(x)
         x = self._prelu3(x)
         x = self._conv4x4_3(x)
+        x = self._flatten(x)
+        x = self._dense(x)
 
         return x, i_part, i_part_prime, i, i_prime
 
@@ -219,23 +229,24 @@ class LightweightGan(keras.models.Model, ABC):
         batch_size = tf.shape(real_logits)[0]
         # this is usually called the non-saturating GAN loss
 
-        real_labels = tf.ones(shape=(batch_size, 5, 5, 1))
-        generated_labels = tf.zeros(shape=(batch_size, 5, 5, 1))
+        real_labels = tf.ones(shape=(batch_size, 1))
+        generated_labels = tf.zeros(shape=(batch_size, 1))
 
         # the generator tries to produce images that the discriminator considers as real
-        generator_loss = keras.losses.hinge(
-            real_labels, generated_logits
+        generator_loss = keras.losses.binary_crossentropy(
+            real_labels, generated_logits, from_logits=True
         )
         # the discriminator tries to determine if images are real or generated
-        discriminator_loss = keras.losses.hinge(
-            tf.concat([real_labels, generated_labels], axis=0),
-            tf.concat([real_logits, generated_logits], axis=0)
-        )
-        # discriminator_loss = keras.losses.binary_crossentropy(
+        # discriminator_loss = lightweight_gan.losses.discriminator_loss(real_logits, generated_logits)
+        # discriminator_loss = keras.losses.hinge(
         #     tf.concat([real_labels, generated_labels], axis=0),
-        #     tf.concat([real_logits, generated_logits], axis=0),
-        #     from_logits=True,
+        #     tf.concat([real_logits, generated_logits], axis=0)
         # )
+        discriminator_loss = keras.losses.binary_crossentropy(
+            tf.concat([real_labels, generated_labels], axis=0),
+            tf.concat([real_logits, generated_logits], axis=0),
+            from_logits=True,
+        )
 
         return tf.reduce_mean(generator_loss), tf.reduce_mean(discriminator_loss)
 
@@ -334,9 +345,7 @@ if __name__ == '__main__':
     logits, real1, recon1, real2, recon2 = discriminator(img)
     discriminator.summary()
 
-    assert logits.shape[1] == 5
-    assert logits.shape[2] == 5
-    assert logits.shape[3] == 1
+    assert logits.shape[1] == 1
 
     assert recon1.shape[1] == 128
     assert recon1.shape[2] == 128
