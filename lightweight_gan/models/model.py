@@ -120,7 +120,7 @@ class Discriminator(keras.models.Model, ABC):
         self._conv4x4_1 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
         self._prelu1 = keras.layers.PReLU(shared_axes=[1, 2])
         self._conv4x4_2 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
-        self._batchnorm1 = keras.layers.BatchNormalization()
+        self._batchnorm1 = keras.layers.LayerNormalization()
         self._prelu2 = keras.layers.PReLU(shared_axes=[1, 2])
 
         filters = 16
@@ -132,7 +132,7 @@ class Discriminator(keras.models.Model, ABC):
         self.simple_decoder_i = SimpleDecoder(512)
 
         self._conv1x1 = keras.layers.Conv2D(512, (1, 1))
-        self._batchnorm2 = keras.layers.BatchNormalization()
+        self._batchnorm2 = keras.layers.LayerNormalization()
         self._prelu3 = keras.layers.PReLU(shared_axes=[1, 2])
         self._conv4x4_3 = keras.layers.Conv2D(1, (4, 4))
         self._flatten = keras.layers.Flatten()
@@ -222,6 +222,41 @@ class LightweightGan(keras.models.Model, ABC):
 
         return tf.reduce_mean(i_loss), tf.reduce_mean(i_part_loss)
 
+    # Define the loss functions for the discriminator,
+    # which should be (fake_loss - real_loss).
+    # We will add the gradient penalty later to this loss function.
+    def discriminator_loss(self, real_img, fake_img):
+        real_loss = tf.reduce_mean(real_img)
+        fake_loss = tf.reduce_mean(fake_img)
+        return fake_loss - real_loss
+
+    # Define the loss functions for the generator.
+    def generator_loss(self, fake_img):
+        return -tf.reduce_mean(fake_img)
+
+    def gradient_penalty(self, batch_size, real_images, fake_images):
+        """ Calculates the gradient penalty.
+
+        This loss is calculated on an interpolated image
+        and added to the discriminator loss.
+        """
+        # Get the interpolated image
+        alpha = tf.random.normal([batch_size, 1, 1, 1], 0.0, 1.0)
+        diff = fake_images - real_images
+        interpolated = real_images + alpha * diff
+
+        with tf.GradientTape() as gp_tape:
+            gp_tape.watch(interpolated)
+            # 1. Get the discriminator output for this interpolated image.
+            pred = self.discriminator(interpolated, training=True)
+
+        # 2. Calculate the gradients w.r.t to this interpolated image.
+        grads = gp_tape.gradient(pred, [interpolated])[0]
+        # 3. Calculate the norm of the gradients.
+        norm = tf.sqrt(tf.reduce_sum(tf.square(grads), axis=[1, 2, 3]))
+        gp = tf.reduce_mean((norm - 1.0) ** 2)
+        return gp
+
     def adversarial_loss(self, real_logits, generated_logits):
         batch_size = tf.shape(real_logits)[0]
         # this is usually called the non-saturating GAN loss
@@ -230,22 +265,23 @@ class LightweightGan(keras.models.Model, ABC):
         generated_labels = tf.zeros(shape=(batch_size, 1))
 
         # the generator tries to produce images that the discriminator considers as real
-        generator_loss = keras.losses.binary_crossentropy(
-            real_labels, generated_logits, from_logits=True
-        )
+        generator_loss = self.generator_loss(generated_logits)
+        # generator_loss = keras.losses.binary_crossentropy(
+        #     real_labels, generated_logits, from_logits=True
+        # )
         # the discriminator tries to determine if images are real or generated
-        # discriminator_loss = lightweight_gan.losses.discriminator_loss(real_logits, generated_logits)
+        discriminator_loss = self.discriminator_loss(real_logits, generated_logits)
         # discriminator_loss = keras.losses.hinge(
         #     tf.concat([real_labels, generated_labels], axis=0),
         #     tf.concat([real_logits, generated_logits], axis=0)
         # )
-        discriminator_loss = keras.losses.binary_crossentropy(
-            tf.concat([real_labels, generated_labels], axis=0),
-            tf.concat([real_logits, generated_logits], axis=0),
-            from_logits=True,
-        )
+        # discriminator_loss = keras.losses.binary_crossentropy(
+        #     tf.concat([real_labels, generated_labels], axis=0),
+        #     tf.concat([real_logits, generated_logits], axis=0),
+        #     from_logits=True,
+        # )
 
-        return tf.reduce_mean(generator_loss), tf.reduce_mean(discriminator_loss)
+        return generator_loss, discriminator_loss
 
     @staticmethod
     def step(values):
@@ -257,6 +293,83 @@ class LightweightGan(keras.models.Model, ABC):
             return self.discriminator(self.generator(inputs))
         else:
             return self.generator(inputs)
+
+    def train_step(self, real_images):
+        if isinstance(real_images, tuple):
+            real_images = real_images[0]
+
+        # Get the batch size
+        batch_size = tf.shape(real_images)[0]
+
+        # For each batch, we are going to perform the
+        # following steps as laid out in the original paper:
+        # 1. Train the generator and get the generator loss
+        # 2. Train the discriminator and get the discriminator loss
+        # 3. Calculate the gradient penalty
+        # 4. Multiply this gradient penalty with a constant weight factor
+        # 5. Add the gradient penalty to the discriminator loss
+        # 6. Return the generator and discriminator losses as a loss dictionary
+
+        # Train the discriminator first. The original paper recommends training
+        # the discriminator for `x` more steps (typically 5) as compared to
+        # one step of the generator. Here we will train it for 3 extra steps
+        # as compared to 5 to reduce the training time.
+        for i in range(self.d_steps):
+            # Get the latent vector
+            random_latent_vectors = tf.random.normal(
+                shape=(batch_size, self.latent_dim)
+            )
+            with tf.GradientTape() as tape:
+                # Generate fake images from the latent vector
+                fake_images = self.generator(random_latent_vectors, training=True)
+                # Get the logits for the fake images
+                fake_logits, _, _, _, _ = self.discriminator(fake_images, training=True)
+                # Get the logits for the real images
+                real_logits, i_part, i_part_prime, i, i_prime = self.discriminator(real_images, training=True)
+
+                # Calculate the discriminator loss using the fake and real image logits
+                d_cost = self.discriminator_loss(real_img=real_logits, fake_img=fake_logits)
+                # Calculate the gradient penalty
+                gp = self.gradient_penalty(batch_size, real_images, fake_images)
+                # Add the gradient penalty to the original discriminator loss
+                d_loss = d_cost + gp * self.gp_weight
+
+                i_loss, i_part_loss = self.autoencoder_loss(i, i_prime, i_part, i_part_prime)
+                decoder_loss = i_loss + i_part_loss / 2.0
+
+            # Get the gradients w.r.t the discriminator loss
+            d_gradient = tape.gradient([d_loss + decoder_loss], self.discriminator.trainable_variables)
+            # Update the weights of the discriminator using the discriminator optimizer
+            self.discriminator_optimizer.apply_gradients(
+                zip(d_gradient, self.discriminator.trainable_variables)
+            )
+
+        # Train the generator
+        # Get the latent vector
+        random_latent_vectors = tf.random.normal(shape=(batch_size, self.latent_dim))
+        with tf.GradientTape() as tape:
+            # Generate fake images using the generator
+            generated_images = self.generator(random_latent_vectors, training=True)
+            # Get the discriminator logits for fake images
+            gen_img_logits, _, _, _, _ = self.discriminator(generated_images, training=True)
+            # Calculate the generator loss
+            g_loss = self.g_loss_fn(gen_img_logits)
+
+        # Get the gradients w.r.t the generator loss
+        gen_gradient = tape.gradient(g_loss, self.generator.trainable_variables)
+        # Update the weights of the generator using the generator optimizer
+        self.g_optimizer.apply_gradients(
+            zip(gen_gradient, self.generator.trainable_variables)
+        )
+
+        self.generator_loss_tracker.update_state(g_loss)
+        self.discriminator_loss_tracker.update_state(d_loss)
+        self.reconstruction_loss.update_state(decoder_loss)
+        self.real_accuracy.update_state(1.0, LightweightGan.step(real_logits))
+        self.generated_accuracy.update_state(0.0, LightweightGan.step(gen_img_logits))
+        # self.augmentation_probability_tracker.update_state(self.augmenter.probability)
+
+        return {m.name: m.result() for m in self.metrics[:-1]}
 
     def train_step(self, real_images):
         batch_size = tf.shape(real_images)[0]
