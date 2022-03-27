@@ -85,7 +85,14 @@ class Discriminator(keras.models.Model, ABC):
     def __init__(self):
         super(Discriminator, self).__init__()
 
+        self._random_flip = keras.layers.RandomFlip()
+        self._random_zoom = keras.layers.RandomZoom(height_factor=(-0.3, 0.3), width_factor=(-0.3, 0.3))
+        self._random_rotate = keras.layers.RandomRotation(factor=0.2)
+        self._random_contrast = keras.layers.RandomContrast(factor=0.4)
+
         self._crop8x8 = StatelessCrop(8, 8)
+        self._resize = Resize(128, 128)
+        self._crop128x128 = StatelessCrop(128, 128)
 
         self._conv4x4_1 = None
         self._prelu1 = None
@@ -95,8 +102,8 @@ class Discriminator(keras.models.Model, ABC):
 
         self._downsampling_layers = []
 
-        self._simple_decoder1 = None
-        self._simple_decoder2 = None
+        self.simple_decoder_i_part = None
+        self.simple_decoder_i = None
 
         self._conv1x1 = None
         self._batchnorm2 = None
@@ -115,8 +122,8 @@ class Discriminator(keras.models.Model, ABC):
             self._downsampling_layers.append(ResidualDownsamplingBlock(filters))
             filters = filters * 2
 
-        self._simple_decoder1 = SimpleDecoder(256)
-        self._simple_decoder2 = SimpleDecoder(512)
+        self.simple_decoder_i_part = SimpleDecoder(256)
+        self.simple_decoder_i = SimpleDecoder(512)
 
         self._conv1x1 = keras.layers.Conv2D(512, (1, 1))
         self._batchnorm2 = keras.layers.BatchNormalization()
@@ -124,31 +131,44 @@ class Discriminator(keras.models.Model, ABC):
         self._conv4x4_3 = keras.layers.Conv2D(1, (4, 4))
 
     def call(self, inputs, training=None, mask=None):
+        seed = tf.random.uniform([2], maxval=1024*1024, dtype=tf.int32)
+        self._crop128x128.seed = seed
+        self._crop8x8.seed = seed
+
+        #  Data augmentation
+        x = self._random_flip(inputs)
+        x = self._random_zoom(x)
+        x = self._random_rotate(x)
+        x = self._random_contrast(x)
+
+        i = self._resize(x)
+        i_part = self._crop128x128(x)
+
         x = self._conv4x4_1(inputs)
         x = self._prelu1(x)
         x = self._conv4x4_2(x)
         x = self._batchnorm1(x)
         x = self._prelu2(x)
 
-        a = None
-        b = None
+        i_part_prime = None
+        i_prime = None
         size = 256
         for layer in self._downsampling_layers:
             x = layer(x)
             size = size / 2
 
             if size == 16:
-                a = self._crop8x8(x)
-                a = self._simple_decoder1(a)
+                i_part_prime = self._crop8x8(x)
+                i_part_prime = self.simple_decoder_i_part(i_part_prime)
             if size == 8:
-                b = self._simple_decoder2(x)
+                i_prime = self.simple_decoder_i(x)
 
         x = self._conv1x1(x)
         x = self._batchnorm2(x)
         x = self._prelu3(x)
         x = self._conv4x4_3(x)
 
-        return x, a, b
+        return x, i_part, i_part_prime, i, i_prime
 
 
 class LightweightGan(keras.models.Model, ABC):
@@ -158,8 +178,6 @@ class LightweightGan(keras.models.Model, ABC):
 
         self.generator = Generator()
         self.discriminator = Discriminator()
-        self._resize = Resize(128, 128)
-        self._crop128x128 = StatelessCrop(128, 128)
 
     def compile(self, generator_optimizer, discriminator_optimizer, **kwargs):
         super(LightweightGan, self).compile(**kwargs)
@@ -187,16 +205,16 @@ class LightweightGan(keras.models.Model, ABC):
         latent_samples = tf.random.normal(shape=[batch_size, 256])
         return self.generator(latent_samples, training)
 
-    def autoencoder_loss(self, real_images, i_scaled_input, image_i, i_cropped_input, image_i_part):
+    def autoencoder_loss(self, i, i_prime, i_part, i_part_prime):
         i_loss = keras.losses.mean_squared_error(
-            i_scaled_input, image_i
+            i, i_prime
         )
 
         i_part_loss = keras.losses.mean_squared_error(
-            i_cropped_input, image_i_part
+            i_part, i_part_prime
         )
 
-        return tf.reduce_mean(i_loss) + tf.reduce_mean(i_part_loss)
+        return tf.reduce_mean(i_loss), tf.reduce_mean(i_part_loss)
 
     def adversarial_loss(self, real_logits, generated_logits):
         batch_size = tf.shape(real_logits)[0]
@@ -235,8 +253,7 @@ class LightweightGan(keras.models.Model, ABC):
 
     def train_step(self, real_images):
         batch_size = tf.shape(real_images)[0]
-        i_scaled_input = self._resize(real_images)
-        i_cropped_input = self._crop128x128(real_images)
+
         #  todo: implement augmentation
         # real_images = self.augmenter(real_images, training=True)
 
@@ -249,15 +266,15 @@ class LightweightGan(keras.models.Model, ABC):
 
             # separate forward passes for the real and generated images, meaning
             # that batch normalization is applied separately
-            real_logits, i_crop, i_scaled = self.discriminator(real_images, training=True)
+            real_logits, i_part, i_part_prime, i, i_prime = self.discriminator(real_images, training=True)
 
-            generated_logits, _, _ = self.discriminator(generated_images, training=True)
+            generated_logits, _, _, _, _ = self.discriminator(generated_images, training=True)
 
             generator_loss, discriminator_loss = self.adversarial_loss(
                 real_logits, generated_logits
             )
 
-            reconstruction_loss = self.autoencoder_loss(real_images, i_scaled_input, i_scaled, i_cropped_input, i_crop)
+            i_loss, i_part_loss = self.autoencoder_loss(i, i_prime, i_part, i_part_prime)
 
         # calculate gradients and update weights
         generator_gradients = tape.gradient(
@@ -265,11 +282,13 @@ class LightweightGan(keras.models.Model, ABC):
         )
 
         discriminator_gradients = tape.gradient(
-            [discriminator_loss, reconstruction_loss], self.discriminator.trainable_weights
+            [discriminator_loss, i_loss, i_part_loss], self.discriminator.trainable_weights
         )
+
         self.generator_optimizer.apply_gradients(
             zip(generator_gradients, self.generator.trainable_weights)
         )
+
         self.discriminator_optimizer.apply_gradients(
             zip(discriminator_gradients, self.discriminator.trainable_weights)
         )
@@ -279,7 +298,7 @@ class LightweightGan(keras.models.Model, ABC):
 
         self.generator_loss_tracker.update_state(generator_loss)
         self.discriminator_loss_tracker.update_state(discriminator_loss)
-        self.reconstruction_loss.update_state(reconstruction_loss)
+        self.reconstruction_loss.update_state(i_loss + i_part_loss)
         self.real_accuracy.update_state(1.0, LightweightGan.step(real_logits))
         self.generated_accuracy.update_state(0.0, LightweightGan.step(generated_logits))
         # self.augmentation_probability_tracker.update_state(self.augmenter.probability)
@@ -330,7 +349,7 @@ if __name__ == '__main__':
     #  test discriminator
 
     discriminator = Discriminator()
-    logits, recon1, recon2 = discriminator(img)
+    logits, real1, recon1, real2, recon2 = discriminator(img)
     discriminator.summary()
 
     assert logits.shape[1] == 5
@@ -355,6 +374,7 @@ if __name__ == '__main__':
         discriminator_optimizer=keras.optimizers.Adam(),
     )
 
-    gan.fit(mock_dataset, epochs=5, callbacks=[keras.callbacks.LambdaCallback(on_epoch_end=gan.save_image_callback(
-        os.path.join(os.path.dirname(__file__), 'generated')
-    ))])
+    with tf.device('/cpu:0'):
+        gan.fit(mock_dataset, epochs=5, callbacks=[keras.callbacks.LambdaCallback(on_epoch_end=gan.save_image_callback(
+            os.path.join(os.path.dirname(__file__), 'generated')
+        ))])
