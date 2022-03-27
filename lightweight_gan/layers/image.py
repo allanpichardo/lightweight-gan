@@ -9,8 +9,8 @@ if typing.TYPE_CHECKING:
 
 class Resize(keras.layers.Layer):
 
-    def __init__(self, height, width):
-        super(Resize, self).__init__()
+    def __init__(self, height, width, **kwargs):
+        super(Resize, self).__init__(trainable=False, **kwargs)
 
         self._channels = None
         self._width = width
@@ -22,8 +22,8 @@ class Resize(keras.layers.Layer):
 
 class StatelessCrop(keras.layers.Layer):
 
-    def __init__(self, height, width, data_format='channels_last'):
-        super(StatelessCrop, self).__init__()
+    def __init__(self, height, width, data_format='channels_last', **kwargs):
+        super(StatelessCrop, self).__init__(trainable=False, **kwargs)
 
         # self.seed = None
         self._channels = None

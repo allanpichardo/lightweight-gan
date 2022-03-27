@@ -104,8 +104,6 @@ class Discriminator(keras.models.Model, ABC):
         self._conv4x4_3 = None
 
     def build(self, input_shape):
-        tf.config.run_functions_eagerly(True)
-
         self._conv4x4_1 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
         self._prelu1 = keras.layers.PReLU(shared_axes=[1, 2])
         self._conv4x4_2 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
