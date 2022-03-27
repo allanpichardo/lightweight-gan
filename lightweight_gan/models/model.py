@@ -1,6 +1,5 @@
 import os.path
 from abc import ABC
-import matplotlib.pyplot as plt
 from lightweight_gan.layers.upsampling_convolution import UpsamplingConvolutionBlock
 from lightweight_gan.layers.skip_layer_excitation import SkipLayerExcitation
 from lightweight_gan.layers.image import Resize, StatelessCrop
@@ -304,23 +303,6 @@ class LightweightGan(keras.models.Model, ABC):
         # self.augmentation_probability_tracker.update_state(self.augmenter.probability)
 
         return {m.name: m.result() for m in self.metrics[:-1]}
-
-    def plot_images(self, epoch=None, logs=None, num_rows=3, num_cols=6, interval=5):
-        # plot random generated images for visual evaluation of generation quality
-        if epoch is None or (epoch + 1) % interval == 0:
-            num_images = num_rows * num_cols
-            generated_images = self.generate(num_images, training=False)
-
-            plt.figure(figsize=(num_cols * 2.0, num_rows * 2.0))
-            for row in range(num_rows):
-                for col in range(num_cols):
-                    index = row * num_cols + col
-                    plt.subplot(num_rows, num_cols, index + 1)
-                    plt.imshow(generated_images[index])
-                    plt.axis("off")
-            plt.tight_layout()
-            plt.show()
-            plt.close()
 
     def save_image_callback(self, image_dir, interval=5, amount=10):
         def callback_function(epoch=None, logs=None):
