@@ -1,18 +1,15 @@
 import os.path
+import typing
 from abc import ABC
 
-import lightweight_gan.losses
-from lightweight_gan.layers.upsampling_convolution import UpsamplingConvolutionBlock
-from lightweight_gan.layers.skip_layer_excitation import SkipLayerExcitation
+import tensorflow as tf
+from tensorflow import keras
+
 from lightweight_gan.layers.image import Resize, StatelessCrop
 from lightweight_gan.layers.residual_downsampling import ResidualDownsamplingBlock
 from lightweight_gan.layers.simple_decoder import SimpleDecoder
-from lightweight_gan.losses.losses import discriminator_loss, generator_loss
-import tensorflow as tf
-import typing
-import tensorflow_gan as tfgan
-
-from tensorflow import keras
+from lightweight_gan.layers.skip_layer_excitation import SkipLayerExcitation
+from lightweight_gan.layers.upsampling_convolution import UpsamplingConvolutionBlock
 
 if typing.TYPE_CHECKING:
     from keras.api._v2 import keras
