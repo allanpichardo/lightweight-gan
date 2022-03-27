@@ -93,6 +93,10 @@ class Discriminator(keras.models.Model, ABC):
         self._resize = Resize(128, 128)
         self._crop128x128 = StatelessCrop(128, 128)
 
+        seed = tf.random.uniform([2], maxval=1024 * 1024, dtype=tf.int32)
+        self._crop128x128.seed = seed
+        self._crop8x8.seed = seed
+
         self._conv4x4_1 = None
         self._prelu1 = None
         self._conv4x4_2 = None
@@ -130,10 +134,6 @@ class Discriminator(keras.models.Model, ABC):
         self._conv4x4_3 = keras.layers.Conv2D(1, (4, 4))
 
     def call(self, inputs, training=None, mask=None):
-        seed = tf.random.uniform([2], maxval=1024*1024, dtype=tf.int32)
-        self._crop128x128.seed = seed
-        self._crop8x8.seed = seed
-
         #  Data augmentation
         x = self._random_flip(inputs)
         x = self._random_zoom(x)

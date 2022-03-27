@@ -7,6 +7,17 @@ if typing.TYPE_CHECKING:
     from keras.api._v2 import keras
 
 
+class RandomSeed(keras.layers.Layer):
+
+    def __init__(self, shape, **kwargs):
+        super(RandomSeed, self).__init__(trainable=False, **kwargs)
+
+        self._shape = shape
+
+    def call(self, inputs, *args, **kwargs):
+        return tf.random.uniform(self._shape, maxval=inputs, dtype=tf.int32)
+
+
 class Resize(keras.layers.Layer):
 
     def __init__(self, height, width, **kwargs):
