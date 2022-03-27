@@ -117,13 +117,13 @@ class Discriminator(keras.models.Model, ABC):
         self._dense = None
 
     def build(self, input_shape):
-        self._conv4x4_1 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
+        self._conv4x4_1 = keras.layers.Conv2D(32, (4, 4), strides=2, padding='same')
         self._prelu1 = keras.layers.PReLU(shared_axes=[1, 2])
-        self._conv4x4_2 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
+        self._conv4x4_2 = keras.layers.Conv2D(32, (4, 4), strides=2, padding='same')
         self._batchnorm1 = keras.layers.LayerNormalization()
         self._prelu2 = keras.layers.PReLU(shared_axes=[1, 2])
 
-        filters = 16
+        filters = 32
         for i in range(5):
             self._downsampling_layers.append(ResidualDownsamplingBlock(filters))
             filters = filters * 2
@@ -136,7 +136,6 @@ class Discriminator(keras.models.Model, ABC):
         self._prelu3 = keras.layers.PReLU(shared_axes=[1, 2])
         self._conv4x4_3 = keras.layers.Conv2D(1, (4, 4))
         self._flatten = keras.layers.Flatten()
-        self._dense = keras.layers.Dense(1)
 
     def call(self, inputs, training=None, mask=None):
         #  Data augmentation
@@ -172,7 +171,6 @@ class Discriminator(keras.models.Model, ABC):
         x = self._prelu3(x)
         x = self._conv4x4_3(x)
         x = self._flatten(x)
-        x = self._dense(x)
 
         return x, i_part, i_part_prime, i, i_prime
 
@@ -261,8 +259,8 @@ class LightweightGan(keras.models.Model, ABC):
         batch_size = tf.shape(real_logits)[0]
         # this is usually called the non-saturating GAN loss
 
-        real_labels = tf.ones(shape=(batch_size, 1))
-        generated_labels = tf.zeros(shape=(batch_size, 1))
+        real_labels = tf.ones(shape=(batch_size, 25))
+        generated_labels = tf.zeros(shape=(batch_size, 25))
 
         # the generator tries to produce images that the discriminator considers as real
         generator_loss = self.generator_loss(generated_logits)
@@ -317,7 +315,7 @@ class LightweightGan(keras.models.Model, ABC):
         for i in range(self.d_steps):
             # Get the latent vector
             random_latent_vectors = tf.random.normal(
-                shape=(batch_size, self.latent_dim)
+                shape=(batch_size, 256)
             )
             with tf.GradientTape() as tape:
                 # Generate fake images from the latent vector
@@ -346,7 +344,7 @@ class LightweightGan(keras.models.Model, ABC):
 
         # Train the generator
         # Get the latent vector
-        random_latent_vectors = tf.random.normal(shape=(batch_size, self.latent_dim))
+        random_latent_vectors = tf.random.normal(shape=(batch_size, 256))
         with tf.GradientTape() as tape:
             # Generate fake images using the generator
             generated_images = self.generator(random_latent_vectors, training=True)
@@ -455,7 +453,7 @@ if __name__ == '__main__':
     logits, real1, recon1, real2, recon2 = discriminator(img)
     discriminator.summary()
 
-    assert logits.shape[1] == 1
+    assert logits.shape[1] == 25
 
     assert recon1.shape[1] == 128
     assert recon1.shape[2] == 128
