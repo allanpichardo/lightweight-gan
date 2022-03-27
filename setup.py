@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='lightweight-gan',
-    version='',
+    version='1.0',
     packages=['lightweight_gan', 'lightweight_gan.layers', 'lightweight_gan.models'],
     url='',
     license='',
