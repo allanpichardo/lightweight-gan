@@ -417,7 +417,7 @@ class LightweightGan(keras.models.Model, ABC):
         )
 
         discriminator_gradients = tape.gradient(
-            discriminator_loss, self.discriminator.trainable_weights
+            discriminator_loss, self.discriminator.trainable_weights, unconnected_gradients=tf.UnconnectedGradients.ZERO
         )
 
         self.generator_optimizer.apply_gradients(
