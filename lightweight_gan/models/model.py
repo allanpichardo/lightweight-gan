@@ -118,21 +118,21 @@ class Discriminator(keras.models.Model, ABC):
         self._dense = None
 
     def build(self, input_shape):
-        self._conv4x4_1 = keras.layers.Conv2D(32, (4, 4), strides=2, padding='same')
+        self._conv4x4_1 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
         self._prelu1 = keras.layers.PReLU(shared_axes=[1, 2])
-        self._conv4x4_2 = keras.layers.Conv2D(32, (4, 4), strides=2, padding='same')
+        self._conv4x4_2 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
         self._batchnorm1 = keras.layers.LayerNormalization()
         self._prelu2 = keras.layers.PReLU(shared_axes=[1, 2])
 
-        filters = 32
+        filters = 16
         for i in range(5):
             self._downsampling_layers.append(ResidualDownsamplingBlock(filters))
             filters = filters * 2
 
         self.simple_decoder_i_part = SimpleDecoder(256)
-        self.simple_decoder_i = SimpleDecoder(512)
+        self.simple_decoder_i = SimpleDecoder(256)
 
-        self._conv1x1 = keras.layers.Conv2D(512, (1, 1))
+        self._conv1x1 = keras.layers.Conv2D(256, (1, 1))
         self._batchnorm2 = keras.layers.LayerNormalization()
         self._prelu3 = keras.layers.PReLU(shared_axes=[1, 2])
         self._conv4x4_3 = keras.layers.Conv2D(1, (4, 4))
@@ -182,7 +182,7 @@ class Discriminator(keras.models.Model, ABC):
 
 class LightweightGan(keras.models.Model, ABC):
 
-    def __init__(self, discriminator_extra_steps=5, gradient_penalty_weight=10.0):
+    def __init__(self,variant='gan', discriminator_extra_steps=5, gradient_penalty_weight=10.0):
         super(LightweightGan, self).__init__()
 
         self.generator = Generator()
@@ -190,6 +190,7 @@ class LightweightGan(keras.models.Model, ABC):
 
         self.d_steps = discriminator_extra_steps
         self.gp_weight = gradient_penalty_weight
+        self.variant = variant
 
 
     def compile(self, generator_optimizer, discriminator_optimizer, **kwargs):
@@ -264,6 +265,12 @@ class LightweightGan(keras.models.Model, ABC):
         gp = tf.reduce_mean((norm - 1.0) ** 2)
         return gp
 
+    def gen_hinge_loss(self, generated_logits, real_logits):
+        return tf.reduce_mean(generated_logits)
+
+    def hinge_loss(self, real_logits, generated_logits):
+        return tf.reduce_mean(tf.nn.relu(1 + real_logits) + tf.nn.relu(1 - generated_logits))
+
     def adversarial_loss(self, real_logits, generated_logits):
         batch_size = tf.shape(real_logits)[0]
         # this is usually called the non-saturating GAN loss
@@ -272,21 +279,21 @@ class LightweightGan(keras.models.Model, ABC):
         generated_labels = tf.zeros(shape=(batch_size, 1))
 
         # the generator tries to produce images that the discriminator considers as real
-        generator_loss = self.generator_loss(generated_logits)
-        # generator_loss = keras.losses.binary_crossentropy(
-        #     real_labels, generated_logits, from_logits=True
-        # )
+        # generator_loss = self.gen_hinge_loss(generated_logits, real_logits)
+        generator_loss = keras.losses.binary_crossentropy(
+            real_labels, generated_logits, from_logits=True
+        )
         # the discriminator tries to determine if images are real or generated
-        discriminator_loss = self.discriminator_loss(real_logits, generated_logits)
         # discriminator_loss = keras.losses.hinge(
         #     tf.concat([real_labels, generated_labels], axis=0),
         #     tf.concat([real_logits, generated_logits], axis=0)
         # )
-        # discriminator_loss = keras.losses.binary_crossentropy(
-        #     tf.concat([real_labels, generated_labels], axis=0),
-        #     tf.concat([real_logits, generated_logits], axis=0),
-        #     from_logits=True,
-        # )
+        # discriminator_loss = self.hinge_loss(real_logits, generated_logits)
+        discriminator_loss = keras.losses.binary_crossentropy(
+            tf.concat([real_labels, generated_labels], axis=0),
+            tf.concat([real_logits, generated_logits], axis=0),
+            from_logits=True,
+        )
 
         return generator_loss, discriminator_loss
 
@@ -302,6 +309,12 @@ class LightweightGan(keras.models.Model, ABC):
             return self.generator(inputs)
 
     def train_step(self, real_images):
+        if self.variant == 'wgan':
+            return self.wgan_train_step(real_images)
+        else:
+            return self.gan_train_step(real_images)
+
+    def wgan_train_step(self, real_images):
         if isinstance(real_images, tuple):
             real_images = real_images[0]
 
@@ -378,59 +391,56 @@ class LightweightGan(keras.models.Model, ABC):
 
         return {m.name: m.result() for m in self.metrics[:-1]}
 
-    # def train_step(self, real_images):
-    #     batch_size = tf.shape(real_images)[0]
-    #
-    #     #  todo: implement augmentation
-    #     # real_images = self.augmenter(real_images, training=True)
-    #
-    #     # use persistent gradient tape because gradients will be calculated twice
-    #     with tf.GradientTape(persistent=True) as tape:
-    #
-    #         generated_images = self.generate(batch_size, training=True)
-    #         # gradient is calculated through the image augmentation
-    #         # generated_images = self.augmenter(generated_images, training=True)
-    #
-    #         # separate forward passes for the real and generated images, meaning
-    #         # that batch normalization is applied separately
-    #         real_logits, i_part, i_part_prime, i, i_prime = self.discriminator(real_images, training=True)
-    #
-    #         generated_logits, _, _, _, _ = self.discriminator(generated_images, training=True)
-    #
-    #         generator_loss, discriminator_loss = self.adversarial_loss(
-    #             real_logits, generated_logits
-    #         )
-    #
-    #         i_loss, i_part_loss = self.autoencoder_loss(i, i_prime, i_part, i_part_prime)
-    #
-    #     # calculate gradients and update weights
-    #     generator_gradients = tape.gradient(
-    #         generator_loss, self.generator.trainable_weights
-    #     )
-    #
-    #     discriminator_gradients = tape.gradient(
-    #         [discriminator_loss, i_loss, i_part_loss], self.discriminator.trainable_weights
-    #     )
-    #
-    #     self.generator_optimizer.apply_gradients(
-    #         zip(generator_gradients, self.generator.trainable_weights)
-    #     )
-    #
-    #     self.discriminator_optimizer.apply_gradients(
-    #         zip(discriminator_gradients, self.discriminator.trainable_weights)
-    #     )
-    #
-    #     # update the augmentation probability based on the discriminator's performance
-    #     # self.augmenter.update(real_logits)
-    #
-    #     self.generator_loss_tracker.update_state(generator_loss)
-    #     self.discriminator_loss_tracker.update_state(discriminator_loss)
-    #     self.reconstruction_loss.update_state(i_loss + i_part_loss)
-    #     self.real_accuracy.update_state(1.0, LightweightGan.step(real_logits))
-    #     self.generated_accuracy.update_state(0.0, LightweightGan.step(generated_logits))
-    #     # self.augmentation_probability_tracker.update_state(self.augmenter.probability)
-    #
-    #     return {m.name: m.result() for m in self.metrics[:-1]}
+    def gan_train_step(self, real_images):
+        batch_size = tf.shape(real_images)[0]
+
+        # use persistent gradient tape because gradients will be calculated twice
+        with tf.GradientTape(persistent=True) as tape:
+
+            generated_images = self.generate(batch_size, training=True)
+            # gradient is calculated through the image augmentation
+            # generated_images = self.augmenter(generated_images, training=True)
+
+            # separate forward passes for the real and generated images, meaning
+            # that batch normalization is applied separately
+            real_logits, i_part, i_part_prime, i, i_prime = self.discriminator(real_images, training=True)
+
+            generated_logits, _, _, _, _ = self.discriminator(generated_images, training=True)
+
+            generator_loss, discriminator_loss = self.adversarial_loss(
+                real_logits, generated_logits
+            )
+
+            i_loss, i_part_loss = self.autoencoder_loss(i, i_prime, i_part, i_part_prime)
+
+        # calculate gradients and update weights
+        generator_gradients = tape.gradient(
+            generator_loss, self.generator.trainable_weights
+        )
+
+        discriminator_gradients = tape.gradient(
+            [discriminator_loss, i_loss, i_part_loss], self.discriminator.trainable_weights
+        )
+
+        self.generator_optimizer.apply_gradients(
+            zip(generator_gradients, self.generator.trainable_weights)
+        )
+
+        self.discriminator_optimizer.apply_gradients(
+            zip(discriminator_gradients, self.discriminator.trainable_weights)
+        )
+
+        # update the augmentation probability based on the discriminator's performance
+        # self.augmenter.update(real_logits)
+
+        self.generator_loss_tracker.update_state(generator_loss)
+        self.discriminator_loss_tracker.update_state(discriminator_loss)
+        self.reconstruction_loss.update_state(i_loss + i_part_loss)
+        self.real_accuracy.update_state(1.0, LightweightGan.step(real_logits))
+        self.generated_accuracy.update_state(0.0, LightweightGan.step(generated_logits))
+        # self.augmentation_probability_tracker.update_state(self.augmenter.probability)
+
+        return {m.name: m.result() for m in self.metrics[:-1]}
 
     def save_image_callback(self, image_dir, interval=5, amount=10):
         def callback_function(epoch=None, logs=None):
