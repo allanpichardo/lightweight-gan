@@ -177,12 +177,20 @@ class Discriminator(keras.models.Model, ABC):
         x = self._dropout(x)
         x = self._dense(x)
 
-        return x, i_part, i_part_prime, i, i_prime
+        i_loss = tf.reduce_mean(keras.losses.mean_squared_error(
+            i, i_prime
+        ))
+        i_part_loss = tf.reduce_mean(keras.losses.mean_squared_error(
+            i_part, i_part_prime
+        ))
+        self.add_loss([i_loss, i_part_loss])
+
+        return x
 
 
 class LightweightGan(keras.models.Model, ABC):
 
-    def __init__(self,variant='gan', discriminator_extra_steps=5, gradient_penalty_weight=10.0):
+    def __init__(self, variant='gan', discriminator_extra_steps=5, gradient_penalty_weight=10.0):
         super(LightweightGan, self).__init__()
 
         self.generator = Generator()
@@ -192,7 +200,6 @@ class LightweightGan(keras.models.Model, ABC):
         self.gp_weight = gradient_penalty_weight
         self.variant = variant
 
-
     def compile(self, generator_optimizer, discriminator_optimizer, **kwargs):
         super(LightweightGan, self).compile(**kwargs)
 
@@ -201,7 +208,6 @@ class LightweightGan(keras.models.Model, ABC):
 
         self.generator_loss_tracker = keras.metrics.Mean(name="g_loss")
         self.discriminator_loss_tracker = keras.metrics.Mean(name="d_loss")
-        self.reconstruction_loss = keras.metrics.Mean(name="recon_loss")
         self.real_accuracy = keras.metrics.BinaryAccuracy(name="real_acc")
         self.generated_accuracy = keras.metrics.BinaryAccuracy(name="gen_acc")
 
@@ -210,7 +216,6 @@ class LightweightGan(keras.models.Model, ABC):
         return [
             self.generator_loss_tracker,
             self.discriminator_loss_tracker,
-            self.reconstruction_loss,
             self.real_accuracy,
             self.generated_accuracy,
         ]
@@ -343,9 +348,9 @@ class LightweightGan(keras.models.Model, ABC):
                 # Generate fake images from the latent vector
                 fake_images = self.generator(random_latent_vectors, training=True)
                 # Get the logits for the fake images
-                fake_logits, _, _, _, _ = self.discriminator(fake_images, training=True)
+                fake_logits = self.discriminator(fake_images, training=True)
                 # Get the logits for the real images
-                real_logits, i_part, i_part_prime, i, i_prime = self.discriminator(real_images, training=True)
+                real_logits = self.discriminator(real_images, training=True)
 
                 # Calculate the discriminator loss using the fake and real image logits
                 d_cost = self.discriminator_loss(real_img=real_logits, fake_img=fake_logits)
@@ -354,11 +359,8 @@ class LightweightGan(keras.models.Model, ABC):
                 # Add the gradient penalty to the original discriminator loss
                 d_loss = d_cost + gp * self.gp_weight
 
-                i_loss, i_part_loss = self.autoencoder_loss(i, i_prime, i_part, i_part_prime)
-                decoder_loss = i_loss + i_part_loss / 2.0
-
             # Get the gradients w.r.t the discriminator loss
-            d_gradient = tape.gradient([d_loss, decoder_loss], self.discriminator.trainable_variables)
+            d_gradient = tape.gradient(d_loss, self.discriminator.trainable_variables)
             # Update the weights of the discriminator using the discriminator optimizer
             self.discriminator_optimizer.apply_gradients(
                 zip(d_gradient, self.discriminator.trainable_variables)
@@ -371,7 +373,7 @@ class LightweightGan(keras.models.Model, ABC):
             # Generate fake images using the generator
             generated_images = self.generator(random_latent_vectors, training=True)
             # Get the discriminator logits for fake images
-            gen_img_logits, _, _, _, _ = self.discriminator(generated_images, training=True)
+            gen_img_logits = self.discriminator(generated_images, training=True)
             # Calculate the generator loss
             g_loss = self.generator_loss(gen_img_logits)
 
@@ -384,7 +386,6 @@ class LightweightGan(keras.models.Model, ABC):
 
         self.generator_loss_tracker.update_state(g_loss)
         self.discriminator_loss_tracker.update_state(d_loss)
-        self.reconstruction_loss.update_state(decoder_loss)
         self.real_accuracy.update_state(1.0, LightweightGan.step(real_logits))
         self.generated_accuracy.update_state(0.0, LightweightGan.step(gen_img_logits))
         # self.augmentation_probability_tracker.update_state(self.augmenter.probability)
@@ -396,22 +397,19 @@ class LightweightGan(keras.models.Model, ABC):
 
         # use persistent gradient tape because gradients will be calculated twice
         with tf.GradientTape(persistent=True) as tape:
-
             generated_images = self.generate(batch_size, training=True)
             # gradient is calculated through the image augmentation
             # generated_images = self.augmenter(generated_images, training=True)
 
             # separate forward passes for the real and generated images, meaning
             # that batch normalization is applied separately
-            real_logits, i_part, i_part_prime, i, i_prime = self.discriminator(real_images, training=True)
+            real_logits = self.discriminator(real_images, training=True)
 
-            generated_logits, _, _, _, _ = self.discriminator(generated_images, training=True)
+            generated_logits = self.discriminator(generated_images, training=True)
 
             generator_loss, discriminator_loss = self.adversarial_loss(
                 real_logits, generated_logits
             )
-
-            i_loss, i_part_loss = self.autoencoder_loss(i, i_prime, i_part, i_part_prime)
 
         # calculate gradients and update weights
         generator_gradients = tape.gradient(
@@ -419,7 +417,7 @@ class LightweightGan(keras.models.Model, ABC):
         )
 
         discriminator_gradients = tape.gradient(
-            [discriminator_loss, i_loss, i_part_loss], self.discriminator.trainable_weights
+            discriminator_loss, self.discriminator.trainable_weights
         )
 
         self.generator_optimizer.apply_gradients(
@@ -430,15 +428,10 @@ class LightweightGan(keras.models.Model, ABC):
             zip(discriminator_gradients, self.discriminator.trainable_weights)
         )
 
-        # update the augmentation probability based on the discriminator's performance
-        # self.augmenter.update(real_logits)
-
         self.generator_loss_tracker.update_state(generator_loss)
         self.discriminator_loss_tracker.update_state(discriminator_loss)
-        self.reconstruction_loss.update_state(i_loss + i_part_loss)
         self.real_accuracy.update_state(1.0, LightweightGan.step(real_logits))
         self.generated_accuracy.update_state(0.0, LightweightGan.step(generated_logits))
-        # self.augmentation_probability_tracker.update_state(self.augmenter.probability)
 
         return {m.name: m.result() for m in self.metrics[:-1]}
 
@@ -449,7 +442,9 @@ class LightweightGan(keras.models.Model, ABC):
                 for i, image in enumerate(generated_images):
                     jpg = tf.image.convert_image_dtype(image, tf.uint8, saturate=True)
                     jpg = tf.image.encode_jpeg(jpg)
-                    tf.io.write_file(os.path.join(image_dir, str(epoch) if epoch is not None else '0', "image-{}.jpg".format(i)), jpg)
+                    tf.io.write_file(
+                        os.path.join(image_dir, str(epoch) if epoch is not None else '0', "image-{}.jpg".format(i)),
+                        jpg)
 
         return callback_function
 
@@ -461,7 +456,8 @@ class LightweightGan(keras.models.Model, ABC):
                 generated_images = self.generate(amount, training=False)
                 file_writer = tf.summary.create_file_writer(log_dir_base)
                 with file_writer.as_default():
-                    tf.summary.image("Generated Images", generated_images, step=epoch if epoch is not None else 0, max_outputs=amount)
+                    tf.summary.image("Generated Images", generated_images, step=epoch if epoch is not None else 0,
+                                     max_outputs=amount)
 
         return callback_function
 
@@ -481,18 +477,10 @@ if __name__ == '__main__':
     #  test discriminator
 
     discriminator = Discriminator()
-    logits, real1, recon1, real2, recon2 = discriminator(img)
+    logits = discriminator(img)
     discriminator.summary()
 
     assert logits.shape[1] == 1
-
-    assert recon1.shape[1] == 128
-    assert recon1.shape[2] == 128
-    assert recon1.shape[3] == 3
-
-    assert recon2.shape[1] == 128
-    assert recon2.shape[2] == 128
-    assert recon2.shape[3] == 3
 
     # test gan
 
