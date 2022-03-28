@@ -4,7 +4,7 @@ from abc import ABC
 
 import tensorflow as tf
 from tensorflow import keras
-
+from datetime import datetime
 from lightweight_gan.layers.image import Resize, StatelessCrop
 from lightweight_gan.layers.residual_downsampling import ResidualDownsamplingBlock
 from lightweight_gan.layers.simple_decoder import SimpleDecoder
@@ -442,6 +442,16 @@ class LightweightGan(keras.models.Model, ABC):
                     tf.io.write_file(os.path.join(image_dir, str(epoch) if epoch is not None else '0', "image-{}.jpg".format(i)), jpg)
 
         return callback_function
+
+    def tensorboard_image_callback(self, log_dir_base, interval=5, amount=3):
+        # Sets up a timestamped log directory.
+        # Creates a file writer for the log directory.
+        def callback_function(epoch=None, logs=None):
+            if epoch is None or (epoch + 1) % interval == 0:
+                generated_images = self.generate(amount, training=False)
+                file_writer = tf.summary.create_file_writer(log_dir_base)
+                with file_writer.as_default():
+                    tf.summary.image("Generated Images", generated_images)
 
 
 if __name__ == '__main__':
