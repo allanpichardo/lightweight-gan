@@ -451,7 +451,7 @@ class LightweightGan(keras.models.Model, ABC):
                 generated_images = self.generate(amount, training=False)
                 file_writer = tf.summary.create_file_writer(log_dir_base)
                 with file_writer.as_default():
-                    tf.summary.image("Generated Images", generated_images)
+                    tf.summary.image("Generated Images", generated_images, step=epoch if epoch is not None else 0, max_outputs=amount)
 
         return callback_function
 
