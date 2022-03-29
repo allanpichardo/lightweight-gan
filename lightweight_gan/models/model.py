@@ -416,7 +416,7 @@ class LightweightGan(keras.models.Model, ABC):
         with tf.GradientTape() as tape:
             predictions = self.discriminator(combined_images)
             d_loss = self.loss_fn(labels, predictions)
-        grads = tape.gradient(d_loss, self.discriminator.trainable_weights)
+        grads = tape.gradient(d_loss, self.discriminator.trainable_weights, unconnected_gradients=tf.UnconnectedGradients.ZERO)
         self.discriminator_optimizer.apply_gradients(
             zip(grads, self.discriminator.trainable_weights)
         )
@@ -434,7 +434,7 @@ class LightweightGan(keras.models.Model, ABC):
         with tf.GradientTape() as tape:
             predictions = self.discriminator(self.generator(random_latent_vectors))
             g_loss = self.loss_fn(misleading_labels, predictions)
-        grads = tape.gradient(g_loss, self.generator.trainable_weights)
+        grads = tape.gradient(g_loss, self.generator.trainable_weights, unconnected_gradients=tf.UnconnectedGradients.ZERO)
         self.generator_optimizer.apply_gradients(zip(grads, self.generator.trainable_weights))
 
         # Update metrics
