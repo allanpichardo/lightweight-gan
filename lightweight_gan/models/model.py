@@ -172,10 +172,11 @@ class Discriminator(keras.models.Model, ABC):
         x = self._conv1x1(x)
         x = self._batchnorm2(x)
         x = self._prelu3(x)
-        x = self._conv4x4_3(x)
+        # x = self._conv4x4_3(x)
         x = self._flatten(x)
         x = self._dropout(x)
         x = self._dense(x)
+        x = tf.nn.sigmoid(x)
 
         i_loss = tf.reduce_mean(keras.losses.mean_squared_error(
             i, i_prime
@@ -200,11 +201,12 @@ class LightweightGan(keras.models.Model, ABC):
         self.gp_weight = gradient_penalty_weight
         self.variant = variant
 
-    def compile(self, generator_optimizer, discriminator_optimizer, **kwargs):
+    def compile(self, generator_optimizer, discriminator_optimizer, loss_function=keras.losses.BinaryCrossentropy(from_logits=False, label_smoothing=0.15), **kwargs):
         super(LightweightGan, self).compile(**kwargs)
 
         self.generator_optimizer = generator_optimizer
         self.discriminator_optimizer = discriminator_optimizer
+        self.loss_fn = loss_function
 
         self.generator_loss_tracker = keras.metrics.Mean(name="g_loss")
         self.discriminator_loss_tracker = keras.metrics.Mean(name="d_loss")
@@ -285,8 +287,8 @@ class LightweightGan(keras.models.Model, ABC):
 
         # the generator tries to produce images that the discriminator considers as real
         # generator_loss = self.gen_hinge_loss(generated_logits, real_logits)
-        generator_loss = keras.losses.binary_crossentropy(
-            real_labels, generated_logits, from_logits=True
+        generator_loss = self.loss_fn(
+            real_labels, generated_logits
         )
         # the discriminator tries to determine if images are real or generated
         # discriminator_loss = keras.losses.hinge(
@@ -294,10 +296,13 @@ class LightweightGan(keras.models.Model, ABC):
         #     tf.concat([real_logits, generated_logits], axis=0)
         # )
         # discriminator_loss = self.hinge_loss(real_logits, generated_logits)
-        discriminator_loss = keras.losses.binary_crossentropy(
-            tf.concat([real_labels, generated_labels], axis=0),
-            tf.concat([real_logits, generated_logits], axis=0),
-            from_logits=True,
+
+        labels = tf.concat([real_labels, generated_labels], axis=0)
+        predictions = tf.concat([real_logits, generated_logits], axis=0)
+        labels += 0.05 * tf.random.uniform(tf.shape(labels))
+        discriminator_loss = self.loss_fn(
+            labels,
+            predictions
         )
 
         return generator_loss, discriminator_loss
