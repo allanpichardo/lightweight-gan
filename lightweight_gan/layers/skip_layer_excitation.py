@@ -1,6 +1,6 @@
 import tensorflow as tf
 import typing
-
+import tensorflow_addons as tfa
 from tensorflow import keras
 
 if typing.TYPE_CHECKING:
@@ -56,9 +56,9 @@ class SkipLayerExcitation(keras.layers.Layer):
         large_filters = large_shape[3] if self._data_format == 'channels_last' else large_shape[1]
 
         self._adaptive_pooling = AdaptivePooling2D(4, 4, data_format=self._data_format)
-        self._convolution4x4 = keras.layers.Conv2D(large_filters, (4, 4), data_format=self._data_format)
+        self._convolution4x4 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(large_filters, (4, 4), data_format=self._data_format))
         self._prelu = keras.layers.PReLU(shared_axes=[1, 2])
-        self._convolution1x1 = keras.layers.Conv2D(large_filters, (1, 1), data_format=self._data_format)
+        self._convolution1x1 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(large_filters, (1, 1), data_format=self._data_format))
         self._sigmoid = tf.nn.sigmoid
         self._mult = keras.layers.Multiply()
 

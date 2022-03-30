@@ -5,6 +5,7 @@ from abc import ABC
 import tensorflow as tf
 from tensorflow import keras
 from datetime import datetime
+import tensorflow_addons as tfa
 from lightweight_gan.layers.image import Resize, StatelessCrop
 from lightweight_gan.layers.residual_downsampling import ResidualDownsamplingBlock
 from lightweight_gan.layers.simple_decoder import SimpleDecoder
@@ -20,9 +21,9 @@ class Generator(keras.models.Model, ABC):
     Takes a 256-dimensional 1-D tensor to generate a 1024x1024 image
     """
 
-    def __init__(self):
+    def __init__(self, latent_dim=256):
         super(Generator, self).__init__()
-
+        self.latent_dim = latent_dim
         self._tanh = None
         self._conv3x3 = None
         self._prelu = None
@@ -32,7 +33,7 @@ class Generator(keras.models.Model, ABC):
         self._conv_transpose = None
 
     def build(self, input_shape):
-        self._conv_transpose = keras.layers.Conv2DTranspose(1024, (4, 4))
+        self._conv_transpose = tfa.layers.SpectralNormalization(keras.layers.Conv2DTranspose(1024, (4, 4)))
         self._batchnorm = keras.layers.BatchNormalization()
         self._prelu = keras.layers.PReLU(shared_axes=[1, 2])
 
@@ -45,11 +46,11 @@ class Generator(keras.models.Model, ABC):
         for i in range(3):
             self._skip_layers.append(SkipLayerExcitation())
 
-        self._conv3x3 = keras.layers.Conv2D(3, (3, 3), padding='same')
+        self._conv3x3 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(3, (3, 3), padding='same'))
         self._tanh = tf.nn.tanh
 
     def call(self, inputs, training=None, mask=None):
-        x = keras.layers.Reshape((1, 1, 256))(inputs)
+        x = keras.layers.Reshape((1, 1, self.latent_dim))(inputs)
         x = self._conv_transpose(x)
         x = self._batchnorm(x)
         x = self._prelu(x)
@@ -118,10 +119,10 @@ class Discriminator(keras.models.Model, ABC):
         self._dense = None
 
     def build(self, input_shape):
-        self._conv4x4_1 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
+        self._conv4x4_1 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(16, (4, 4), strides=2, padding='same'))
         self._prelu1 = keras.layers.PReLU(shared_axes=[1, 2])
-        self._conv4x4_2 = keras.layers.Conv2D(16, (4, 4), strides=2, padding='same')
-        self._batchnorm1 = keras.layers.LayerNormalization()
+        self._conv4x4_2 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(16, (4, 4), strides=2, padding='same'))
+        self._batchnorm1 = keras.layers.BatchNormalization()
         self._prelu2 = keras.layers.PReLU(shared_axes=[1, 2])
 
         filters = 16
@@ -132,8 +133,8 @@ class Discriminator(keras.models.Model, ABC):
         self.simple_decoder_i_part = SimpleDecoder(256)
         self.simple_decoder_i = SimpleDecoder(256)
 
-        self._conv1x1 = keras.layers.Conv2D(256, (1, 1))
-        self._batchnorm2 = keras.layers.LayerNormalization()
+        self._conv1x1 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(256, (1, 1)))
+        self._batchnorm2 = keras.layers.BatchNormalization()
         self._prelu3 = keras.layers.PReLU(shared_axes=[1, 2])
         self._conv4x4_3 = keras.layers.Conv2D(1, (4, 4))
         self._flatten = keras.layers.Flatten()
@@ -191,15 +192,16 @@ class Discriminator(keras.models.Model, ABC):
 
 class LightweightGan(keras.models.Model, ABC):
 
-    def __init__(self, variant='gan', discriminator_extra_steps=5, gradient_penalty_weight=10.0):
+    def __init__(self, latent_dim=256, variant='gan', discriminator_extra_steps=5, gradient_penalty_weight=10.0):
         super(LightweightGan, self).__init__()
 
-        self.generator = Generator()
+        self.generator = Generator(latent_dim=latent_dim)
         self.discriminator = Discriminator()
 
         self.d_steps = discriminator_extra_steps
         self.gp_weight = gradient_penalty_weight
         self.variant = variant
+        self.latent_dim = latent_dim
 
     def compile(self, generator_optimizer, discriminator_optimizer, loss_function=keras.losses.BinaryCrossentropy(from_logits=False, label_smoothing=0.15), **kwargs):
         super(LightweightGan, self).compile(**kwargs)
@@ -219,7 +221,7 @@ class LightweightGan(keras.models.Model, ABC):
         ]
 
     def generate(self, batch_size, training):
-        latent_samples = tf.random.normal(shape=[batch_size, 256])
+        latent_samples = tf.random.normal(shape=[batch_size, self.latent_dim])
         return self.generator(latent_samples, training)
 
     def autoencoder_loss(self, i, i_prime, i_part, i_part_prime):
@@ -343,7 +345,7 @@ class LightweightGan(keras.models.Model, ABC):
         for i in range(self.d_steps):
             # Get the latent vector
             random_latent_vectors = tf.random.normal(
-                shape=(batch_size, 256)
+                shape=(batch_size, self.latent_dim)
             )
             with tf.GradientTape() as tape:
                 # Generate fake images from the latent vector
@@ -369,7 +371,7 @@ class LightweightGan(keras.models.Model, ABC):
 
         # Train the generator
         # Get the latent vector
-        random_latent_vectors = tf.random.normal(shape=(batch_size, 256))
+        random_latent_vectors = tf.random.normal(shape=(batch_size, self.latent_dim))
         with tf.GradientTape() as tape:
             # Generate fake images using the generator
             generated_images = self.generator(random_latent_vectors, training=True)
