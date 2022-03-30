@@ -210,16 +210,12 @@ class LightweightGan(keras.models.Model, ABC):
 
         self.generator_loss_tracker = keras.metrics.Mean(name="g_loss")
         self.discriminator_loss_tracker = keras.metrics.Mean(name="d_loss")
-        self.real_accuracy = keras.metrics.BinaryAccuracy(name="real_acc")
-        self.generated_accuracy = keras.metrics.BinaryAccuracy(name="gen_acc")
 
     @property
     def metrics(self):
         return [
-            self.generator_loss_tracker,
             self.discriminator_loss_tracker,
-            self.real_accuracy,
-            self.generated_accuracy,
+            self.generator_loss_tracker,
         ]
 
     def generate(self, batch_size, training):
@@ -395,50 +391,55 @@ class LightweightGan(keras.models.Model, ABC):
         self.generated_accuracy.update_state(0.0, LightweightGan.step(gen_img_logits))
         # self.augmentation_probability_tracker.update_state(self.augmenter.probability)
 
-        return {m.name: m.result() for m in self.metrics[:-1]}
+        return {
+            "d_loss": self.discriminator_loss_tracker.result(),
+            "g_loss": self.generator_loss_tracker.result()
+        }
 
     def gan_train_step(self, real_images):
         batch_size = tf.shape(real_images)[0]
 
-        # use persistent gradient tape because gradients will be calculated twice
-        with tf.GradientTape(persistent=True) as tape:
-            generated_images = self.generate(batch_size, training=True)
-            # gradient is calculated through the image augmentation
-            # generated_images = self.augmenter(generated_images, training=True)
+        generated_images = self.generate(batch_size, training=False)
+        combined_image = tf.concat([generated_images, real_images], axis=0)
 
-            # separate forward passes for the real and generated images, meaning
-            # that batch normalization is applied separately
-            real_logits = self.discriminator(real_images, training=True)
-
-            generated_logits = self.discriminator(generated_images, training=True)
-
-            generator_loss, discriminator_loss = self.adversarial_loss(
-                real_logits, generated_logits
-            )
-
-        # calculate gradients and update weights
-        generator_gradients = tape.gradient(
-            generator_loss, self.generator.trainable_weights
+        labels = tf.concat(
+            [tf.ones((batch_size, 1)), tf.zeros((batch_size, 1))], axis=0
         )
+        labels += 0.05 * tf.random.uniform(tf.shape(labels))
+
+        with tf.GradientTape(persistent=True) as tape:
+            predictions = self.discriminator(combined_image, training=True)
+            discriminator_loss = self.loss_fn(labels, predictions)
 
         discriminator_gradients = tape.gradient(
             discriminator_loss, self.discriminator.trainable_weights, unconnected_gradients=tf.UnconnectedGradients.ZERO
-        )
-
-        self.generator_optimizer.apply_gradients(
-            zip(generator_gradients, self.generator.trainable_weights)
         )
 
         self.discriminator_optimizer.apply_gradients(
             zip(discriminator_gradients, self.discriminator.trainable_weights)
         )
 
+        misleading_labels = tf.zeros((batch_size, 1))
+
+        with tf.GradientTape() as tape:
+            predictions = self.discriminator(self.generate(batch_size, training=True), training=False)
+            generator_loss = self.loss_fn(misleading_labels, predictions)
+
+        generator_gradients = tape.gradient(
+            generator_loss, self.generator.trainable_weights, unconnected_gradients=tf.UnconnectedGradients.ZERO
+        )
+
+        self.generator_optimizer.apply_gradients(
+            zip(generator_gradients, self.generator.trainable_weights)
+        )
+
         self.generator_loss_tracker.update_state(generator_loss)
         self.discriminator_loss_tracker.update_state(discriminator_loss)
-        self.real_accuracy.update_state(1.0, LightweightGan.step(real_logits))
-        self.generated_accuracy.update_state(0.0, LightweightGan.step(generated_logits))
 
-        return {m.name: m.result() for m in self.metrics[:-1]}
+        return {
+            "d_loss": self.discriminator_loss_tracker.result(),
+            "g_loss": self.generator_loss_tracker.result()
+        }
 
     def save_image_callback(self, image_dir, interval=5, amount=10):
         def callback_function(epoch=None, logs=None):
