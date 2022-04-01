@@ -34,7 +34,7 @@ class Generator(keras.models.Model, ABC):
         self._conv_transpose = None
 
     def build(self, input_shape):
-        self._conv_transpose = tfa.layers.SpectralNormalization(keras.layers.Conv2DTranspose(1024, (4, 4)))
+        self._conv_transpose = tfa.layers.SpectralNormalization(keras.layers.Conv2DTranspose(1024, (4, 4), kernel_initializer='he_normal'))
         self._batchnorm = PixelwiseFeatureNormalization()
         self._prelu = keras.layers.PReLU(shared_axes=[1, 2])
 
@@ -47,7 +47,7 @@ class Generator(keras.models.Model, ABC):
         for i in range(3):
             self._skip_layers.append(SkipLayerExcitation())
 
-        self._conv3x3 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(3, (3, 3), padding='same'))
+        self._conv3x3 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(3, (3, 3), padding='same', kernel_initializer='he_normal'))
         self._tanh = tf.nn.tanh
 
     def call(self, inputs, training=None, mask=None):
@@ -120,9 +120,9 @@ class Discriminator(keras.models.Model, ABC):
         self._dense = None
 
     def build(self, input_shape):
-        self._conv4x4_1 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(16, (4, 4), strides=2, padding='same'))
+        self._conv4x4_1 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(16, (4, 4), strides=2, padding='same', kernel_initializer='he_normal'))
         self._prelu1 = keras.layers.PReLU(shared_axes=[1, 2])
-        self._conv4x4_2 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(16, (4, 4), strides=2, padding='same'))
+        self._conv4x4_2 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(16, (4, 4), strides=2, padding='same', kernel_initializer='he_normal'))
         self._batchnorm1 = PixelwiseFeatureNormalization()
         self._prelu2 = keras.layers.PReLU(shared_axes=[1, 2])
 
@@ -134,13 +134,13 @@ class Discriminator(keras.models.Model, ABC):
         self.simple_decoder_i_part = SimpleDecoder(256)
         self.simple_decoder_i = SimpleDecoder(256)
 
-        self._conv1x1 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(256, (1, 1)))
+        self._conv1x1 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(256, (1, 1), kernel_initializer='he_normal'))
         self._batchnorm2 = PixelwiseFeatureNormalization()
         self._prelu3 = keras.layers.PReLU(shared_axes=[1, 2])
         self._conv4x4_3 = keras.layers.Conv2D(1, (4, 4))
         self._flatten = keras.layers.Flatten()
         self._dropout = keras.layers.Dropout(0.2)
-        self._dense = keras.layers.Dense(1)
+        self._dense = keras.layers.Dense(1, kernel_initializer='he_normal')
 
     def call(self, inputs, training=None, mask=None):
         #  Data augmentation
