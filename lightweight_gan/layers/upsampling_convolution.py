@@ -25,7 +25,7 @@ class UpsamplingConvolutionBlock(keras.layers.Layer):
     def build(self, input_shape):
         self._upsampling = keras.layers.UpSampling2D()
         self._convolution3x3 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(self._filters, (3, 3), padding='same', data_format=self._data_format, kernel_initializer='he_normal'))
-        self._batch_norm = keras.layers.LayerNormalization()
+        self._batch_norm = keras.layers.BatchNormalization()
         self._prelu = keras.layers.PReLU(shared_axes=[1, 2])
 
     def call(self, inputs, *args, **kwargs):
