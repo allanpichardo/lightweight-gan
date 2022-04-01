@@ -11,6 +11,7 @@ from lightweight_gan.layers.residual_downsampling import ResidualDownsamplingBlo
 from lightweight_gan.layers.simple_decoder import SimpleDecoder
 from lightweight_gan.layers.skip_layer_excitation import SkipLayerExcitation
 from lightweight_gan.layers.upsampling_convolution import UpsamplingConvolutionBlock
+from lightweight_gan.layers.pixelwise_feature_normalization import PixelwiseFeatureNormalization
 
 if typing.TYPE_CHECKING:
     from keras.api._v2 import keras
@@ -34,7 +35,7 @@ class Generator(keras.models.Model, ABC):
 
     def build(self, input_shape):
         self._conv_transpose = tfa.layers.SpectralNormalization(keras.layers.Conv2DTranspose(1024, (4, 4)))
-        self._batchnorm = keras.layers.BatchNormalization()
+        self._batchnorm = PixelwiseFeatureNormalization()
         self._prelu = keras.layers.PReLU(shared_axes=[1, 2])
 
         # goes from 512x4x4 -> 4x1024x1024 over 8 upsamples
@@ -122,7 +123,7 @@ class Discriminator(keras.models.Model, ABC):
         self._conv4x4_1 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(16, (4, 4), strides=2, padding='same'))
         self._prelu1 = keras.layers.PReLU(shared_axes=[1, 2])
         self._conv4x4_2 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(16, (4, 4), strides=2, padding='same'))
-        self._batchnorm1 = keras.layers.BatchNormalization()
+        self._batchnorm1 = PixelwiseFeatureNormalization()
         self._prelu2 = keras.layers.PReLU(shared_axes=[1, 2])
 
         filters = 16
@@ -134,7 +135,7 @@ class Discriminator(keras.models.Model, ABC):
         self.simple_decoder_i = SimpleDecoder(256)
 
         self._conv1x1 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(256, (1, 1)))
-        self._batchnorm2 = keras.layers.BatchNormalization()
+        self._batchnorm2 = PixelwiseFeatureNormalization()
         self._prelu3 = keras.layers.PReLU(shared_axes=[1, 2])
         self._conv4x4_3 = keras.layers.Conv2D(1, (4, 4))
         self._flatten = keras.layers.Flatten()

@@ -1,6 +1,7 @@
 import tensorflow as tf
 import typing
 import tensorflow_addons as tfa
+from .pixelwise_feature_normalization import PixelwiseFeatureNormalization
 
 from tensorflow import keras
 
@@ -31,15 +32,15 @@ class ResidualDownsamplingBlock(keras.layers.Layer):
     def build(self, input_shape):
         self._convolution4x4 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(self._filters, (4, 4), strides=2, padding='same',
                                                    data_format=self._data_format))
-        self._batch_norm1 = keras.layers.BatchNormalization()
+        self._batch_norm1 = PixelwiseFeatureNormalization()
         self._prelu1 = keras.layers.PReLU(shared_axes=[1, 2])
         self._convolution3x3 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(self._filters, (3, 3), padding='same', data_format=self._data_format))
-        self._batch_norm2 = keras.layers.BatchNormalization()
+        self._batch_norm2 = PixelwiseFeatureNormalization()
         self._prelu2 = keras.layers.PReLU(shared_axes=[1, 2])
 
         self._average_pool = keras.layers.AveragePooling2D()
         self._convolution1x1 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(self._filters, (1, 1), data_format=self._data_format))
-        self._batch_norm3 = keras.layers.BatchNormalization()
+        self._batch_norm3 = PixelwiseFeatureNormalization()
         self._prelu3 = keras.layers.PReLU(shared_axes=[1, 2])
 
     def call(self, inputs, *args, **kwargs):
