@@ -122,11 +122,11 @@ class Discriminator(keras.models.Model, ABC):
     def build(self, input_shape):
         self._conv4x4_1 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(16, (4, 4), strides=2, padding='same', kernel_initializer='he_normal'))
         self._prelu1 = keras.layers.PReLU(shared_axes=[1, 2])
-        self._conv4x4_2 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(16, (4, 4), strides=2, padding='same', kernel_initializer='he_normal'))
+        self._conv4x4_2 = tfa.layers.SpectralNormalization(keras.layers.Conv2D(32, (4, 4), strides=2, padding='same', kernel_initializer='he_normal'))
         self._batchnorm1 = keras.layers.BatchNormalization()
         self._prelu2 = keras.layers.PReLU(shared_axes=[1, 2])
 
-        filters = 16
+        filters = 32
         for i in range(5):
             self._downsampling_layers.append(ResidualDownsamplingBlock(filters))
             filters = filters * 2
