@@ -152,7 +152,7 @@ class Discriminator(keras.models.Model, ABC):
         i = self._resize(x)
         i_part = self._crop128x128(x)
 
-        x = self._conv4x4_1(inputs)
+        x = self._conv4x4_1(x)
         x = self._prelu1(x)
         x = self._conv4x4_2(x)
         x = self._batchnorm1(x)
