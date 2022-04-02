@@ -88,9 +88,9 @@ class Discriminator(keras.models.Model, ABC):
         super(Discriminator, self).__init__()
 
         self._random_flip = keras.layers.RandomFlip()
-        self._random_zoom = keras.layers.RandomZoom(height_factor=(-0.3, 0.3), width_factor=(-0.3, 0.3))
-        self._random_rotate = keras.layers.RandomRotation(factor=0.2)
-        self._random_contrast = keras.layers.RandomContrast(factor=0.4)
+        self._random_zoom = keras.layers.RandomZoom(height_factor=(-0.5, 0.5), width_factor=(-0.5, 0.5))
+        self._random_translation = keras.layers.RandomTranslation(0.5, 0.5)
+        self._noise = keras.layers.GaussianNoise(0.08)
 
         self._crop8x8 = StatelessCrop(8, 8)
         self._resize = Resize(128, 128)
@@ -146,8 +146,8 @@ class Discriminator(keras.models.Model, ABC):
         #  Data augmentation
         x = self._random_flip(inputs)
         x = self._random_zoom(x)
-        x = self._random_rotate(x)
-        x = self._random_contrast(x)
+        x = self._random_translation(x)
+        x = self._noise(x)
 
         i = self._resize(x)
         i_part = self._crop128x128(x)
@@ -425,7 +425,7 @@ class LightweightGan(keras.models.Model, ABC):
         misleading_labels = tf.zeros((batch_size, 1))
 
         with tf.GradientTape() as tape:
-            predictions = self.discriminator(self.generate(batch_size, training=True), training=False)
+            predictions = self.discriminator(self.generate(batch_size, training=True), training=True)
             generator_loss = self.loss_fn(misleading_labels, predictions)
 
         generator_gradients = tape.gradient(
