@@ -457,12 +457,13 @@ class LightweightGan(keras.models.Model, ABC):
 
         return callback_function
 
-    def tensorboard_image_callback(self, log_dir_base, interval=5, amount=3):
+    def tensorboard_image_callback(self, log_dir_base, interval=5, amount=3, seed=None):
         # Sets up a timestamped log directory.
         # Creates a file writer for the log directory.
         def callback_function(epoch=None, logs=None):
             if epoch is None or (epoch + 1) % interval == 0:
-                generated_images = self.generate(amount, training=False)
+                z = tf.random.normal([amount, self.latent_dim], seed=seed)
+                generated_images = self.generator(z, training=False)
                 generated_images = (generated_images + 1.0) / 2.0
                 file_writer = tf.summary.create_file_writer(log_dir_base)
                 with file_writer.as_default():
